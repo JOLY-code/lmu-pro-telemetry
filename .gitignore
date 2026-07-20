@@ -1,0 +1,18 @@
+# Python
+.venv/
+__pycache__/
+*.duckdb
+*.svm
+
+# Java / Maven
+target/
+*.jar
+.mvn/
+
+# Node / React
+node_modules/
+dist/
+
+# IDE
+.vscode/
+.idea/
