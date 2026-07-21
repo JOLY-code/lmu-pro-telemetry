@@ -41,6 +41,7 @@ class LMUTelemetryPipeline:
         try:
             df_stint = con.execute(query).df()
             con.close()
+            if df_stint.empty: return None
             max_acceptable_time = df_stint['LapTime'].min() * 1.05
             return df_stint[df_stint['LapTime'] <= max_acceptable_time]
         except duckdb.Error:
@@ -77,7 +78,6 @@ class LMUTelemetryPipeline:
             con.close()
             return None
 
-    # --- MÉTHODE RAPATRIÉE DEPUIS L'IA ---
     def extract_pitstop_history(self):
         """Extrait l'historique complet des arrêts aux stands de tous les joueurs."""
         db_file = self._get_latest_duckdb()

@@ -1,7 +1,7 @@
 import time
 import mmap
 import ctypes
-from PyQt6.QtCore import QThread, pyqtSignal
+import threading
 
 # ==============================================================================
 # MAPPING EXHAUSTIF DE LA STRUCTURE C++ (rFactor 2 / LMU Engine)
@@ -21,10 +21,10 @@ class rF2VehicleTelemetry(ctypes.Structure):
         ("mFilteredThrottle", ctypes.c_double),   
         ("mFilteredBrake", ctypes.c_double),
         ("mSteeringWheelAngle", ctypes.c_double),
-        ("mSteeringShaftTorque", ctypes.c_double), # Force dans la colonne de direction (Nm) - Indique le sous-virage absolu
-        ("mFrontDownforce", ctypes.c_double),      # Appui aéro avant réel (Newtons)
-        ("mRearDownforce", ctypes.c_double),       # Appui aéro arrière réel (Newtons)
-        ("mDrag", ctypes.c_double),                # Traînée aérodynamique globale
+        ("mSteeringShaftTorque", ctypes.c_double), 
+        ("mFrontDownforce", ctypes.c_double),      
+        ("mRearDownforce", ctypes.c_double),       
+        ("mDrag", ctypes.c_double),                
         ("mElectricBoostMotorRPM", ctypes.c_double), 
         ("mElectricBoostMotorTorque", ctypes.c_double),
         ("mBatteryCharge", ctypes.c_double),
@@ -111,14 +111,13 @@ class rF2ScoringInfo(ctypes.Structure):
 # LE THREAD DE LECTURE (SÉCURISÉ ANTI-CHEAT)
 # ==============================================================================
 
-class LiveTelemetryThread(QThread):
-    telemetry_tick = pyqtSignal(dict)
-    
+class LiveTelemetryThread(threading.Thread):
     def __init__(self):
         super().__init__()
         self.running = True
         self.telemetry_mmap = None
         self.scoring_mmap = None
+        self.latest_data = None # Remplace le pyqtSignal pour stocker la donnée brute
 
     def _connect_to_lmu_memory(self):
         try:
@@ -210,7 +209,8 @@ class LiveTelemetryThread(QThread):
                         'CompetitorsCount': len(competitors),
                         'CompetitorsLive': competitors
                     }
-                    self.telemetry_tick.emit(live_data)
+                    
+                    self.latest_data = live_data # Met à jour la variable avec la dernière trame
                 
             except Exception:
                 pass
@@ -221,4 +221,4 @@ class LiveTelemetryThread(QThread):
         self.running = False
         if self.telemetry_mmap: self.telemetry_mmap.close()
         if self.scoring_mmap: self.scoring_mmap.close()
-        self.wait()
+        self.join()

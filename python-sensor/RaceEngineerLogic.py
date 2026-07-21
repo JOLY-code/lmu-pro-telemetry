@@ -1,10 +1,12 @@
+import pandas as pd
+
 class RaceEngineerLogic:
     """
     Moteur d'inférence d'ingénierie de course avancé.
     Gère désormais l'aéro, les pneus, le freinage et la balance mécanique.
     """
     def __init__(self, setup_manager):
-        self.sm = setup_manager # Référence à LMU_SetupManager[cite: 5]
+        self.sm = setup_manager
         self.diagnostic_report = []
 
     def log(self, message):
@@ -29,13 +31,13 @@ class RaceEngineerLogic:
                 self.log("⚠️ Piste humide détectée. L'IA recommande d'activer le protocole Pluie (Rain Setup).")
             self._adapt_setup_to_session_format(race_duration_minutes=duree)
             
-            # --- CORRECTION : APPEL DE LA STRATÉGIE DE CARBURANT ---
+            # --- STRATÉGIE DE CARBURANT ---
             self.calculate_race_strategy(df_telemetry, duree, tank_capacity_liters=110.0)
         else:
             self.log("⚠️ Attention radio : Contexte de session introuvable.")
             self._adapt_setup_to_session_format(race_duration_minutes=40)
 
-        # 2. Analyse Châssis (Ton code existant)
+        # 2. Analyse Châssis
         avg_data = df_telemetry.mean()
         self._analyze_mechanical_balance(df_telemetry)
         self._analyze_braking(df_telemetry)
@@ -50,7 +52,7 @@ class RaceEngineerLogic:
         self._analyze_wear_and_damage(df_telemetry)
         self._analyze_electronics(df_telemetry)
 
-        # 3. --- CORRECTION : ANALYSE DES ADVERSAIRES ---
+        # 3. ANALYSE DES ADVERSAIRES
         if df_competitors is not None and not df_competitors.empty:
             self.analyze_race_pace_vs_competitors(df_telemetry, df_competitors)
 
@@ -63,7 +65,6 @@ class RaceEngineerLogic:
         Dans LMU, si l'angle de braquage (Steering) est extrême mais que la force G latérale plafonne, 
         c'est du sous-virage (la voiture tire tout droit).
         """
-        # Note : On anticipe les colonnes 'SteeringAngle' et 'LatAccel' dans notre future extraction DuckDB[cite: 1]
         if 'SteeringAngle' in df.columns and 'LatAccel' in df.columns:
             max_steer = df['SteeringAngle'].max()
             max_g = df['LatAccel'].max()
@@ -72,13 +73,13 @@ class RaceEngineerLogic:
             if max_steer > 90 and max_g < 1.5:
                 self.log("Diagnostic : Sous-virage important détecté en milieu de courbe.")
                 self.log("Action : Assouplissement de la barre anti-roulis avant (Front ARB) pour donner du grip au train avant.")
-                self.sm.modify_parameter('Suspension', 'FrontAntiSway', delta=-2.0)[cite: 5]
+                self.sm.modify_parameter('Suspension', 'FrontAntiSway', delta=-2.0)
             
             # Si la dérive du train arrière (Yaw) est trop forte
             elif df.get('YawRate', pd.Series([0])).max() > 40:
                 self.log("Diagnostic : Survirage critique (Train arrière instable).")
                 self.log("Action : Assouplissement de la barre anti-roulis arrière (Rear ARB).")
-                self.sm.modify_parameter('Suspension', 'RearAntiSway', delta=-2.0)[cite: 5]
+                self.sm.modify_parameter('Suspension', 'RearAntiSway', delta=-2.0)
 
     def _analyze_braking(self, df):
         """
@@ -92,12 +93,12 @@ class RaceEngineerLogic:
             if front_lock > rear_lock + 10:
                 self.log("Diagnostic : Tu bloques l'avant au gros freinage.")
                 self.log("Action : Recul de la répartition de freinage (Brake Bias -1%).")
-                self.sm.modify_parameter('Brakes', 'BrakeBias', delta=-1.0)[cite: 5]
+                self.sm.modify_parameter('Brakes', 'BrakeBias', delta=-1.0)
             
             elif rear_lock > front_lock + 10:
                 self.log("Diagnostic : Danger, blocage du train arrière. Risque de tête-à-queue.")
                 self.log("Action : Avancée de la répartition de freinage (Brake Bias +1%).")
-                self.sm.modify_parameter('Brakes', 'BrakeBias', delta=+1.0)[cite: 5]
+                self.sm.modify_parameter('Brakes', 'BrakeBias', delta=+1.0)
 
     def _analyze_dampers(self, df):
         """
@@ -270,8 +271,8 @@ class RaceEngineerLogic:
             self.log(f"🚨 Diagnostic Stratégique : Tu es à +{delta_to_leader:.1f}s du leader. Setup non compétitif ou pilotage en sur-régime.")
             self.log("Ordre : On va assouplir la voiture pour te redonner de la confiance.")
             # L'IA prend l'initiative d'assouplir les barres anti-roulis pour rendre la voiture plus docile
-            self.sm.modify_parameter('Suspension', 'FrontAntiSway', delta=-3.0)[cite: 21]
-            self.sm.modify_parameter('Suspension', 'RearAntiSway', delta=-3.0)[cite: 21]
+            self.sm.modify_parameter('Suspension', 'FrontAntiSway', delta=-3.0)
+            self.sm.modify_parameter('Suspension', 'RearAntiSway', delta=-3.0)
         
     def _adapt_setup_to_session_format(self, race_duration_minutes):
         """
@@ -284,18 +285,18 @@ class RaceEngineerLogic:
             self.log("Mode SPRINT activé : Priorité à la performance pure. Le poids et la traînée sont les ennemis.")
             self.log("Action : Fermeture partielle des radiateurs et écopes de freins (Gain de VMax).")
             # Les limites min empêchent de fermer à 100% pour éviter de casser le moteur
-            self.sm.modify_parameter('Engine', 'RadiatorIntake', delta=-1.0, limit_min=2.0)[cite: 9]
-            self.sm.modify_parameter('Brakes', 'BrakeDuctSize', delta=-1.0, limit_min=1.0)[cite: 9]
+            self.sm.modify_parameter('Engine', 'RadiatorIntake', delta=-1.0, limit_min=2.0)
+            self.sm.modify_parameter('Brakes', 'BrakeDuctSize', delta=-1.0, limit_min=1.0)
             
         # Format Endurance (> 60 minutes)
         else:
             self.log("Mode ENDURANCE activé : Priorité à la fiabilité et à la préservation du matériel.")
             self.log("Action : Ouverture du refroidissement (pour survivre dans le trafic) et sécurisation du fond plat.")
-            self.sm.modify_parameter('Engine', 'RadiatorIntake', delta=+1.0, limit_max=5.0)[cite: 9]
-            self.sm.modify_parameter('Brakes', 'BrakeDuctSize', delta=+1.0, limit_max=5.0)[cite: 9]
+            self.sm.modify_parameter('Engine', 'RadiatorIntake', delta=+1.0, limit_max=5.0)
+            self.sm.modify_parameter('Brakes', 'BrakeDuctSize', delta=+1.0, limit_max=5.0)
             # On monte la caisse de 1mm pour éviter d'user la planche (Plank Wear) sur 6 heures de course
-            self.sm.modify_parameter('Aero', 'FrontRideHeight', delta=+1.0)[cite: 9]
-            self.sm.modify_parameter('Aero', 'RearRideHeight', delta=+1.0)[cite: 9]
+            self.sm.modify_parameter('Aero', 'FrontRideHeight', delta=+1.0)
+            self.sm.modify_parameter('Aero', 'RearRideHeight', delta=+1.0)
 
     def _analyze_hybrid_deployment(self, df):
         """
