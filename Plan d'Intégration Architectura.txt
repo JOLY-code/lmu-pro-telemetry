@@ -1,83 +1,35 @@
-🗺️ Plan d'Intégration Architectural (Roadmap E-Sport)
-Pour avoir un outil qui rivalise avec les standards professionnels (MoTeC, Track Titan), il faut procéder avec une rigueur industrielle. Voici le plan de vol pour transformer cette base en une suite logicielle absolue, organisé par sprints d'intégration :
+### 🗺️ Le Nouveau Plan d'Architecture (100% Local & Audio)
 
-Sprint 1 : Consolidation du Pipeline de Données (Core Engine)
-Objectif : Garantir que 100% de la donnée passe de la RAM du jeu à l'interface sans perte de trame.
+Voici la feuille de route chirurgicale pour transformer ton code en un véritable Ingénieur de Piste automatisé.
 
-Actions :
+#### Sprint 1 : Le Moteur Audio (Zero Latency Spotter)
 
-S'assurer que la sonde live_telemetry.py (qui lit la structure C++) tourne parfaitement en tâche de fond à 60Hz.
+L'objectif est d'ajouter la voix sans bloquer la lecture de la mémoire à 60Hz.
 
-Connecter les jauges de l'interface (les barres de frein/accélérateur, les températures de pneus) pour qu'elles clignotent et s'animent en temps réel quand le jeu tourne.
+* **Intégration de `pyttsx3` :** Utilisation de la librairie vocale native de Windows (gratuite, locale, voix instantanée).
+* **File d'attente (Queue) et Threading :** L'ingénieur audio tournera sur un *Thread* séparé. Si plusieurs alertes arrivent (ex: "Drapeau Jaune" + "Pneu Froid"), le système les lira l'une après l'autre sans jamais geler LMU ou la télémétrie.
+* **Machine d'États (Cooldowns) :** Empêcher le script de bégayer *"Hypercar à gauche"* 60 fois par seconde. Une alerte aura un "cooldown" (ex: 5 secondes de silence avant de répéter la même info).
 
-Gérer les déconnexions : Si le jeu crash, la sonde doit se mettre en veille sans faire crasher notre application Python.
+#### Sprint 2 : Algorithmes Spatiaux & Dangers
 
-Sprint 2 : Le "Live Radar" Multijoueur
-Objectif : Exploiter la variable GPS (mPos) que nous avons extraite pour construire une carte radar.
+On transforme la donnée brute DuckDB/Mémoire en intelligence tactique.
 
-Actions :
+* **Radar Multiclasse :** Filtre permanent sur les classes supérieures. Calcul des distances d'approche (en mètres ou en secondes).
+* **Détection des zones de crash :** Mapping dynamique des adversaires arrêtés.
+* **Auto-Apprentissage des Pits :** Enregistrement du point d'entrée de la pitlane pour lancer le fameux bip et la voix *"Pit limiter in 100 meters, speed down"*.
 
-Utiliser pyqtgraph pour dessiner une vue de dessus dynamique.
+#### Sprint 3 : Stratège Carburant et Châssis
 
-Placer ton véhicule au centre et afficher les adversaires (sous forme de points de couleur selon leur catégorie LMP2/GT3) tournant autour de toi en temps réel.
+C'est ici qu'on gagne les courses d'endurance.
 
-Calculer les "Gaps" (écarts en secondes) en direct entre les voitures.
+* **Calcul de Fin de Course :** L'algorithme calcule le nombre de tours restants en fonction du chrono moyen et du temps de session.
+* **Consommation dynamique :** L'ingénieur t'annonce le "Fuel Target" ou te dit *"We are short on fuel, lift and coast"* si tes derniers tours consomment trop.
+* **Bilan des dégâts :** Analyse en direct pour te dire *"Aero damage is minor, keep pushing"* ou *"Box this lap for repairs, we are losing 1.5s per sector"*.
 
-Sprint 3 : Le Cerveau Analytique (Inférence IA)
-Objectif : Rendre l'onglet "Race Engineer" (la radio) réellement intelligent.
+#### Sprint 4 : Refonte UI (Engineer Dashboard)
 
-Actions :
+Puisqu'on supprime l'IA payante, l'onglet "Race Engineer" dans React change de rôle.
 
-Connecter le champ de texte du chat à ton script RaceEngineerLogic.py.
-
-Permettre à l'IA de lire directement le DataFrame Pandas généré par la base DuckDB.
-
-Si tu tapes "Pourquoi je perds du temps dans le secteur 2 ?", l'algorithme devra analyser les variables WheelSlip et SteeringAngle de ce secteur précis pour te répondre de manière mathématique.
-
-Sprint 4 : Vision & Automatisation (Long Terme)
-Objectif : Ajouter une couche d'analyse par l'image pour valider des états que la télémétrie ne donne pas toujours.
-
-Actions :
-
-Intégrer un module léger de computer vision (type architecture YOLO) pour analyser un flux vidéo capturé de ton écran.
-
-Détecter automatiquement l'apparition de drapeaux spécifiques sur les commissaires virtuels, ou isoler le moment précis où la voiture franchit les limites de piste (Track Limits) pour synchroniser la vidéo avec la courbe de télémétrie correspondante.
-
-
-
-
- 		 
-
-
-
-
-
-
-
-
-
-
-
-
-Étape,Module,Fonctionnalité Clé,Impact Performance
-Passe 1,Interface WEC SaaS,"Intégration esthétique des pages Dashboard, Leaderboard réel et Academy technique.",Nul (Uniquement de l'affichage UI)
-Passe 2,Live Synchro,"Connecter les jauges (pédales, pneus) pour qu'elles s'animent en direct via le flux de la RAM.",Négligeable (<1% CPU via rafraîchissement PyQt)
-Passe 3,Radio Assist (IA),Liaison du chat de l'ingénieur avec un modèle de langage local bridé sur le CPU (Inférence post-relais).,Moyen (À n'utiliser qu'au garage)
-Passe 4,Radar de Proximité,Utilisation des coordonnées mPos pour afficher la carte du circuit avec les points des coéquipiers/adversaires en direct.,Faible (Calculs trigonométriques simples à 60Hz)               	 	
-
-
-
-
-
-
-
-
-
-🗺️ Le Plan "Analyse Post-Session Absolue" (Objectif WEC)
-Puisque nous sommes d'accord pour faire de cet outil un monstre d'analyse après la course (0 impact FPS), voici le plan d'intégration pour les prochains blocs :
-
-Comparaison de Télémétrie (La Base Pro) : Dans l'onglet Your Sessions, on va ajouter un bouton pour "Superposer le tour de référence". Le graphique pyqtgraph affichera ta trace de frein (rouge) et ta trace d'accélérateur (vert), superposées à celles du meilleur tour de ta session DuckDB (en pointillé gris).
-
-Détection des Erreurs de Pilotage : On va utiliser l'algorithme RaceEngineerLogic (déterministe, rapide, sans IA lourde) pour analyser tes traces. S'il voit que ton freinage chute brutalement à 0% alors que la force G baisse (blocage), il créera une "Tip Card" qui dira exactement dans quel virage c'est arrivé.
-
-Liaison Setup <-> Télémétrie : Quand tu regarderas ton Setup dans le "Garage", si la télémétrie indique un sous-virage (Steering vs LatG), l'onglet "Suspension" mettra la Barre Anti-Roulis (ARB) en surbrillance orange pour t'indiquer que c'est là qu'il faut agir.
+* **Le "Radio Log" :** Le grand panneau de droite deviendra la retranscription écrite (historique) de tout ce que ton ingénieur audio t'a dit pendant le relais.
+* **Les "Setup Alerts" :** Plutôt qu'un long texte généré par IA, tu auras des étiquettes dures et mathématiques : *[SOUS-VIRAGE DÉTECTÉ: T7 -> Assouplir ARB Avant]*.
+* **Tableau de mixage audio :** Des boutons dans l'UI React pour activer/désactiver certaines voix (Mute Traffic, Mute Fuel warnings, etc.).

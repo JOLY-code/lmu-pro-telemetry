@@ -11,6 +11,10 @@ from telemetry_data import LMUTelemetryPipeline
 from setup_manager import LMU_SetupManager
 from RaceEngineerLogic import RaceEngineerLogic
 
+# --- NOUVEAUX IMPORTS DES EMPLOYÉS VIRTUELS ---
+from audio_spotter import AudioSpotter
+from live_spotter import LiveSpotterEngine
+
 app = FastAPI(title="LMU Track Engineer API")
 
 app.add_middleware(
@@ -20,16 +24,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Initialisation des Threads
 telemetry_engine = LiveTelemetryThread()
+audio_engine = AudioSpotter()
+spotter_engine = LiveSpotterEngine(telemetry_engine, audio_engine)
 
 @app.on_event("startup")
 def startup_event():
     print("[API] Démarrage de la sonde télémétrique LMU en tâche de fond...")
     threading.Thread(target=telemetry_engine.run, daemon=True).start()
+    
+    # Démarrage de l'ingénieur audio et tactique
+    audio_engine.start()
+    spotter_engine.start()
 
 @app.on_event("shutdown")
 def shutdown_event():
     print("[API] Arrêt des processus sécurisés...")
+    spotter_engine.stop()
+    audio_engine.stop()
     telemetry_engine.stop()
 
 # ==========================================================

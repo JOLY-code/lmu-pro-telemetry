@@ -189,28 +189,38 @@ class LiveTelemetryThread(threading.Thread):
                         'FilteredBrake': my_phys.mFilteredBrake * 100.0, 
                         'Steering': my_phys.mSteeringWheelAngle * 57.2958,
                         
-                        # Le Secret Pro (FFB & Aéro)
-                        'SteeringTorqueFFB': my_phys.mSteeringShaftTorque,
+                        # Aéro & Moteur
                         'FrontDownforceN': my_phys.mFrontDownforce,
                         'RearDownforceN': my_phys.mRearDownforce,
                         'DragN': my_phys.mDrag,
+                        'Gear': my_phys.mGear, 
+                        'FuelLevel': my_phys.mFuel, 
+                        'BatteryCharge': my_phys.mBatteryCharge * 100.0,
+                        'BrakeBias': my_phys.mBrakeBias,
+
+                        # --- LES 4 ROUES (FL=0, FR=1, RL=2, RR=3) ---
+                        # Pressions (en kPa)
+                        'TirePressFL': my_phys.mTirePressure[0],
+                        'TirePressFR': my_phys.mTirePressure[1],
+                        'TirePressRL': my_phys.mTirePressure[2],
+                        'TirePressRR': my_phys.mTirePressure[3],
                         
-                        'RideHeightFL': my_phys.mRideHeight[0], 'BrakeTempFL': my_phys.mBrakeTemp[0],
-                        'TireWearFL': my_phys.mTireWear[0] * 100.0, 'BatteryCharge': my_phys.mBatteryCharge * 100.0,
-                        'Gear': my_phys.mGear, 'FuelLevel': my_phys.mFuel, 'MaxRPM': my_phys.mEngineMaxRPM,
+                        # Températures des freins
+                        'BrakeTempFL': my_phys.mBrakeTemp[0],
+                        'BrakeTempFR': my_phys.mBrakeTemp[1],
+                        'BrakeTempRL': my_phys.mBrakeTemp[2],
+                        'BrakeTempRR': my_phys.mBrakeTemp[3],
+
+                        # Usure (%)
+                        'TireWearFL': my_phys.mTireWear[0] * 100.0,
+                        'TireWearFR': my_phys.mTireWear[1] * 100.0,
+                        'TireWearRL': my_phys.mTireWear[2] * 100.0,
+                        'TireWearRR': my_phys.mTireWear[3] * 100.0,
                         
-                        'BrakeBias': my_phys.mBrakeBias,         
-                        'GripFractFL': my_phys.mGripFract[0],    
-                        'TireLoadFL': my_phys.mTireLoad[0],      
-                        
-                        'WheelRotFL': my_phys.mWheelRotation[0],
-                        'LocalVelX': my_phys.mLocalVel[0],
-                        
-                        'CompetitorsCount': len(competitors),
-                        'CompetitorsLive': competitors
+                        'CompetitorsCount': len(competitors)
                     }
                     
-                    self.latest_data = live_data # Met à jour la variable avec la dernière trame
+                    self.latest_data = live_data
                 
             except Exception:
                 pass
