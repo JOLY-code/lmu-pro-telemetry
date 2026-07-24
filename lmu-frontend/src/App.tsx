@@ -43,7 +43,7 @@ const CrosshairTooltip = ({ active, payload, colorMy, colorRef, unit }: any) => 
   return null;
 };
 
-// --- COMPOSANT VUE DATA COMPLET (100% REAL DATA + LIVE) ---
+// --- COMPOSANT VUE DATA COMPLET (100% REAL DATA + LIVE + G-METER) ---
 const DataView = ({ laps, historicalData, liveData }: any) => {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const refColor = "#e9c46a"; 
@@ -57,6 +57,25 @@ const DataView = ({ laps, historicalData, liveData }: any) => {
   };
   const handleMouseLeave = () => setHoverIndex(null);
 
+  // Variables sécurisées (Priorité au Live, sinon Historique survolé)
+  const activeData = (hoverIndex !== null && chartData[hoverIndex]) ? chartData[hoverIndex] : (chartData[0] || {});
+  
+  const displayThrottle = liveData?.Throttle !== undefined ? liveData.Throttle : (activeData.Throttle || 0);
+  const displayBrake = liveData?.Brake !== undefined ? liveData.Brake : (activeData.Brake || 0);
+  const displaySpeed = liveData?.Speed !== undefined ? liveData.Speed : (activeData.TopSpeed || 0);
+  const displayGear = liveData?.Gear !== undefined ? liveData.Gear : (activeData.Gear || 1);
+  const displayFuel = liveData?.FuelLevel !== undefined ? liveData.FuelLevel.toFixed(2) : '--';
+
+  const refSpeed = activeData.TopSpeed_ref || 0;
+  const refBrake = activeData.Brake_ref || 0;
+  const refThrottle = activeData.Throttle_ref || 0;
+
+  // Calcul du G-Meter (Cercle de Friction)
+  const gLat = liveData?.GForceLat !== undefined ? liveData.GForceLat / 9.81 : 0;
+  const gLon = liveData?.GForceLon !== undefined ? liveData.GForceLon / 9.81 : 0;
+  const gX = Math.max(-3, Math.min(3, gLat));
+  const gY = Math.max(-3, Math.min(3, gLon)); // Négatif au freinage
+
   return (
     <div className="flex-1 flex gap-6 h-full">
       {/* COLONNE GAUCHE : GRAPHIQUES EMPILÉS & HUD */}
@@ -67,8 +86,9 @@ const DataView = ({ laps, historicalData, liveData }: any) => {
           <span className="absolute top-2 left-3 text-[10px] font-bold text-[#8338ec]">DELTA</span>
           <ResponsiveContainer width="100%" height="100%">
             <RechartsLine data={chartData} syncId="dataSync" onMouseMove={handleMouseMove} onMouseLeave={handleMouseLeave}>
-              <YAxis hide domain={[-1, 1]} />
-              <ReferenceLine y={0} stroke="#333" strokeDasharray="3 3" />
+              <YAxis hide domain={['dataMin', 'dataMax']} />
+              <ReferenceLine y={0} stroke="#4a4d65" strokeDasharray="3 3" />
+              <Line type="monotone" dataKey="delta" stroke="#8338ec" strokeWidth={2} dot={false} isAnimationActive={false} />
             </RechartsLine>
           </ResponsiveContainer>
         </div>
@@ -81,6 +101,7 @@ const DataView = ({ laps, historicalData, liveData }: any) => {
               <YAxis hide domain={[0, 350]} />
               <Tooltip content={<CrosshairTooltip colorMy="#3a86ff" colorRef={refColor} unit="KMH" />} cursor={{ stroke: '#3a86ff', strokeWidth: 1.5 }} isAnimationActive={false} />
               <Line type="monotone" dataKey="TopSpeed" stroke="#3a86ff" strokeWidth={2} dot={false} isAnimationActive={false} />
+              <Line type="monotone" dataKey="TopSpeed_ref" stroke={refColor} strokeWidth={1.5} strokeDasharray="4 4" dot={false} isAnimationActive={false} />
             </RechartsLine>
           </ResponsiveContainer>
         </div>
@@ -93,6 +114,7 @@ const DataView = ({ laps, historicalData, liveData }: any) => {
               <YAxis hide domain={[0, 105]} />
               <Tooltip content={<CrosshairTooltip colorMy="#2a9d8f" colorRef={refColor} unit="%" />} cursor={{ stroke: '#3a86ff', strokeWidth: 1.5 }} isAnimationActive={false} />
               <Line type="stepBefore" dataKey="Throttle" stroke="#2a9d8f" strokeWidth={2} dot={false} isAnimationActive={false} />
+              <Line type="stepBefore" dataKey="Throttle_ref" stroke={refColor} strokeWidth={1.5} strokeDasharray="4 4" dot={false} isAnimationActive={false} />
             </RechartsLine>
           </ResponsiveContainer>
         </div>
@@ -105,6 +127,7 @@ const DataView = ({ laps, historicalData, liveData }: any) => {
               <YAxis hide domain={[0, 105]} />
               <Tooltip content={<CrosshairTooltip colorMy="#e76f51" colorRef={refColor} unit="%" />} cursor={{ stroke: '#3a86ff', strokeWidth: 1.5 }} isAnimationActive={false} />
               <Line type="stepBefore" dataKey="Brake" stroke="#e76f51" strokeWidth={2} dot={false} isAnimationActive={false} />
+              <Line type="stepBefore" dataKey="Brake_ref" stroke={refColor} strokeWidth={1.5} strokeDasharray="4 4" dot={false} isAnimationActive={false} />
             </RechartsLine>
           </ResponsiveContainer>
         </div>
@@ -119,7 +142,7 @@ const DataView = ({ laps, historicalData, liveData }: any) => {
                 <span className="flex items-center gap-1.5 text-[11px] font-sans text-[#a0a3b5]">
                   <CloudRain size={12} className="text-[#3a86ff]"/> {liveData?.RainIntensity !== undefined ? (liveData.RainIntensity * 100).toFixed(0) : '--'}% 
                   <Cloud size={12} className="text-[#3a86ff]"/> {liveData?.TrackTemp !== undefined ? liveData.TrackTemp.toFixed(1) : '--'}°C 
-                  <Fuel size={12} className="text-[#3a86ff]"/> {liveData?.FuelLevel !== undefined ? liveData.FuelLevel.toFixed(2) : '--'} L
+                  <Fuel size={12} className="text-[#3a86ff]"/> {displayFuel} L
                 </span>
               </div>
               <span className="text-[#3a86ff] font-bold text-xs tracking-wide">MY LAP</span>
@@ -221,12 +244,11 @@ const DataView = ({ laps, historicalData, liveData }: any) => {
   );
 };
 
-// --- COMPOSANT VUE DRIVING (100% Vraie Data Python + LIVE TELEMETRY) ---
+// --- COMPOSANT VUE DRIVING (100% Vraie Data Python + LIVE TELEMETRY + G-METER) ---
 const DrivingView = ({ laps, historicalData, liveData }: any) => {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const [showInsights, setShowInsights] = useState(true);
 
-  // Remplacement de la simulation par le mapping des VRAIES données DuckDB
   const data = historicalData && historicalData.length > 0 
     ? historicalData.map((d: any, i: number) => ({
         index: i,
@@ -255,13 +277,18 @@ const DrivingView = ({ laps, historicalData, liveData }: any) => {
     ? data.filter((_: any, i: number) => i % Math.ceil(data.length / 100) === 0) 
     : data;
 
-  // --- BLOC 2 : PRIORITÉ AU TEMPS RÉEL ---
-  // Si liveData existe, on l'affiche sur le HUD, sinon on affiche la data historique (hover)
+  // Variables sécurisées (Priorité au Temps Réel)
   const displayThrottle = liveData?.Throttle !== undefined ? liveData.Throttle : activeData.throttleMy;
   const displayBrake = liveData?.Brake !== undefined ? liveData.Brake : activeData.brakeMy;
   const displaySpeed = liveData?.Speed !== undefined ? liveData.Speed : activeData.speedMy;
   const displayGear = liveData?.Gear !== undefined ? liveData.Gear : activeData.gearMy;
   const displayFuel = liveData?.FuelLevel !== undefined ? liveData.FuelLevel.toFixed(2) : '--';
+
+  // Calcul du G-Meter (Cercle de Friction)
+  const gLat = liveData?.GForceLat !== undefined ? liveData.GForceLat / 9.81 : 0;
+  const gLon = liveData?.GForceLon !== undefined ? liveData.GForceLon / 9.81 : 0;
+  const gX = Math.max(-3, Math.min(3, gLat));
+  const gY = Math.max(-3, Math.min(3, gLon)); // Négatif au freinage = le point ira vers le haut visuellement avec le -gY CSS
 
   return (
     <div className="flex-1 relative bg-[#1c1e2b] rounded-xl border border-gray-800 overflow-hidden shadow-2xl flex flex-col flex-row">
@@ -321,7 +348,7 @@ const DrivingView = ({ laps, historicalData, liveData }: any) => {
         </div>
         <div className="p-3 bg-[#1c1e2b]/80 border-y border-gray-800 flex justify-between items-center text-xs font-bold">
           <span className="text-white tracking-widest">STINT 1</span>
-          <span className="text-[#8338ec] flex items-center gap-1"><RefreshCw size={12}/> --:--.---</span>
+          <span className="text-[#8338ec] flex items-center gap-1"><RefreshCw size={12}/> {liveData?.MyLastLap ? liveData.MyLastLap.toFixed(3) : '--:--.---'}</span>
         </div>
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
           {laps.map((l: any, idx: number) => (
@@ -360,7 +387,7 @@ const DrivingView = ({ laps, historicalData, liveData }: any) => {
           </div>
         </div>
 
-        {/* BARRES DE TÉLÉMÉTRIE LIVE */}
+        {/* BARRES DE TÉLÉMÉTRIE LIVE & G-METER CENTRAL */}
         <div className="flex items-center justify-between bg-[#212332] p-2 rounded-lg border border-gray-800">
           <div className="flex items-center gap-3 w-[45%]">
             <div className="w-6 h-6 rounded-full border-2 border-[#3a86ff] flex items-center justify-center text-[#3a86ff]">🛞</div>
@@ -371,7 +398,22 @@ const DrivingView = ({ laps, historicalData, liveData }: any) => {
             <span className="text-[11px] font-bold text-white ml-2 flex gap-2 w-28">⚙️ {displayGear} <span className="text-[#3a86ff] ml-2">🚀 {Math.round(displaySpeed)} KMH</span></span>
           </div>
           
-          <div className="w-12 h-6 bg-[#181924] rounded-full border border-gray-700 flex items-center px-1"><div className="w-4 h-4 bg-[#3a86ff] rounded-full"></div></div>
+          {/* CERCLE DE FRICTION (G-G DIAGRAM) */}
+          <div className="w-12 h-12 bg-[#181924] rounded-full border-2 border-[#2a2c3d] relative overflow-hidden flex items-center justify-center shadow-inner shrink-0">
+            {/* Réticule central */}
+            <div className="absolute w-full h-px bg-[#4a4d65]/30"></div>
+            <div className="absolute h-full w-px bg-[#4a4d65]/30"></div>
+            {/* Anneau de tolérance 2G */}
+            <div className="absolute w-2/3 h-2/3 rounded-full border border-[#4a4d65]/20"></div>
+            
+            {/* Le traceur G-Force (Violet brillant) */}
+            <div 
+              className="absolute w-2.5 h-2.5 bg-[#8338ec] rounded-full shadow-[0_0_10px_#8338ec] transition-all duration-75"
+              style={{
+                transform: `translate(${gX * 7}px, ${-gY * 7}px)` // -gY inverse l'axe vertical (le frein pousse le point vers le haut)
+              }}
+            ></div>
+          </div>
 
           <div className="flex items-center gap-3 w-[45%] justify-end">
             <span className="text-[11px] font-bold text-white flex gap-2 w-28 justify-end"><span className="text-[#e9c46a] mr-2">🚀 {Math.round(activeData.speedRef)} KMH</span> ⚙️ {activeData.gearRef}</span>
@@ -1087,7 +1129,17 @@ export default function App() {
            if (data.telemetry) setHistoricalData(data.telemetry);
            if (data.new_setup) setAiSetup(data.new_setup);
            if (data.report) setAiReport(data.report);
-           // Si l'API renvoie les tours, on met à jour lapsData ici plus tard
+           
+           // --- NOUVEAU : Injection des temps au tour ---
+           if (data.laps && data.laps.length > 0) {
+             const formattedLaps = data.laps.map((l: any) => ({
+               lap: `L${l.Lap}`,
+               time: l.LapTime.toFixed(3),
+               diff: l.Valid === 1 ? 'VALID' : 'INVALID',
+               active: false // On pourrait mettre true pour le meilleur tour
+             }));
+             setLapsData(formattedLaps.reverse()); // Reverse pour avoir le dernier tour en haut
+           }
         }
       } catch(err) {
         console.error("En attente du serveur Python...");

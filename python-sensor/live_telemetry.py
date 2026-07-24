@@ -131,21 +131,30 @@ class LiveTelemetryThread(threading.Thread):
         print("[SONDE] Tentative de connexion (Mode Read-Only Anti-Cheat)...")
         while self.running and not self._connect_to_lmu_memory():
             time.sleep(2)
-        print("[SONDE] Connecté à LMU. Acquisition Omnisciente active.")
+        print("[SONDE] Connecté à LMU. Acquisition Omnisciente et Sécurisée active.")
 
         while self.running:
             try:
+                # --- 1. SÉCURISATION ANTI-CORRUPTION (Spinlock) ---
                 self.telemetry_mmap.seek(0)
-                telemetry_array = rF2TelemetryArray.from_buffer_copy(self.telemetry_mmap.read(ctypes.sizeof(rF2TelemetryArray)))
+                raw_telemetry = self.telemetry_mmap.read(ctypes.sizeof(rF2TelemetryArray))
+                telemetry_array = rF2TelemetryArray.from_buffer_copy(raw_telemetry)
+                
+                # Vérification de l'intégrité de la trame (Race Condition)
+                # Si Begin et End sont différents, le jeu était en train d'écrire pendant notre lecture.
+                # On jette immédiatement la trame pour protéger l'analyse.
+                if telemetry_array.mVersionUpdateBegin != telemetry_array.mVersionUpdateEnd:
+                    continue 
                 
                 self.scoring_mmap.seek(0)
-                scoring_data = rF2ScoringInfo.from_buffer_copy(self.scoring_mmap.read(ctypes.sizeof(rF2ScoringInfo)))
+                raw_scoring = self.scoring_mmap.read(ctypes.sizeof(rF2ScoringInfo))
+                scoring_data = rF2ScoringInfo.from_buffer_copy(raw_scoring)
 
                 my_phys = None
                 my_score = None
                 competitors = []
                 
-                # 1. Extraction du Live Timing (Scoring)
+                # 2. Extraction du Live Timing (Scoring)
                 for i in range(scoring_data.mNumVehicles):
                     score_car = scoring_data.mVehicles[i]
                     if score_car.mIsPlayer == 1:
@@ -162,23 +171,27 @@ class LiveTelemetryThread(threading.Thread):
                             'front_tire': score_car.mFrontTireCompoundName.decode('utf-8', errors='ignore')
                         })
 
-                # 2. Extraction de la Physique (Telemetry)
+                # 3. Extraction de la Physique (Telemetry)
                 for i in range(telemetry_array.mNumVehicles):
                     phys_car = telemetry_array.mVehicles[i]
                     if phys_car.mIsPlayer == 1:
                         my_phys = phys_car
                         break
 
-                # 3. Packaging global E-Sport
+                # 4. Packaging global E-Sport (Avec toutes les variables Spotter)
                 if my_phys and my_score:
                     live_data = {
                         # Direction de course
-                        'Time': scoring_data.mCurrentET, 'TrackTemp': scoring_data.mTrackTemp,
-                        'RainIntensity': scoring_data.mRaining, 'YellowFlag': scoring_data.mYellowFlagState,
+                        'Time': scoring_data.mCurrentET, 
+                        'TrackTemp': scoring_data.mTrackTemp,
+                        'RainIntensity': scoring_data.mRaining, 
+                        'YellowFlag': scoring_data.mYellowFlagState,
                         'BlueFlag': scoring_data.mBlueFlag,
+                        'Penalties': scoring_data.mPenalties, # Ajouté pour le Spotter
                         
                         # Ton Live Timing
-                        'MyPosition': my_score.mPlace, 'MyLapDist': my_score.mLapDist,
+                        'MyPosition': my_score.mPlace, 
+                        'MyLapDist': my_score.mLapDist,
                         'MyLastLap': my_score.mLastLapTime,
                         
                         # Ta Physique & Électronique
@@ -189,35 +202,46 @@ class LiveTelemetryThread(threading.Thread):
                         'FilteredBrake': my_phys.mFilteredBrake * 100.0, 
                         'Steering': my_phys.mSteeringWheelAngle * 57.2958,
                         
-                        # Aéro & Moteur
+                        # Aéro & Santé Moteur
                         'FrontDownforceN': my_phys.mFrontDownforce,
                         'RearDownforceN': my_phys.mRearDownforce,
                         'DragN': my_phys.mDrag,
                         'Gear': my_phys.mGear, 
                         'FuelLevel': my_phys.mFuel, 
                         'BatteryCharge': my_phys.mBatteryCharge * 100.0,
+                        'EngineWaterTemp': my_phys.mEngineWaterTemp, # Ajouté pour le Spotter
+                        'EngineDamage': my_phys.mEngineDamage,       # Ajouté pour le Spotter
+                        'AeroDamage': my_phys.mAeroDamage,
                         'BrakeBias': my_phys.mBrakeBias,
 
+                        # --- CERCLE DE FRICTION (G-Forces) ---
+                        'GForceLat': my_phys.mGForce[0], # G Latéral (Virage)
+                        'GForceLon': my_phys.mGForce[2], # G Longitudinal (Accélération/Freinage)
+
                         # --- LES 4 ROUES (FL=0, FR=1, RL=2, RR=3) ---
-                        # Pressions (en kPa)
                         'TirePressFL': my_phys.mTirePressure[0],
                         'TirePressFR': my_phys.mTirePressure[1],
                         'TirePressRL': my_phys.mTirePressure[2],
                         'TirePressRR': my_phys.mTirePressure[3],
                         
-                        # Températures des freins
                         'BrakeTempFL': my_phys.mBrakeTemp[0],
                         'BrakeTempFR': my_phys.mBrakeTemp[1],
                         'BrakeTempRL': my_phys.mBrakeTemp[2],
                         'BrakeTempRR': my_phys.mBrakeTemp[3],
 
-                        # Usure (%)
+                        'TireTempFL': my_phys.mTireTemp[0][0], # Ajouté pour alerte Pneus froids
+                        'TireTempFR': my_phys.mTireTemp[0][1], 
+                        
                         'TireWearFL': my_phys.mTireWear[0] * 100.0,
                         'TireWearFR': my_phys.mTireWear[1] * 100.0,
                         'TireWearRL': my_phys.mTireWear[2] * 100.0,
                         'TireWearRR': my_phys.mTireWear[3] * 100.0,
                         
-                        'CompetitorsCount': len(competitors)
+                        'WheelRotFL': my_phys.mWheelRotation[0], # Pour détection Lock-up (Flat spot)
+                        'LocalVelX': my_phys.mLocalVel[0],
+                        
+                        'CompetitorsCount': len(competitors),
+                        'CompetitorsLive': competitors
                     }
                     
                     self.latest_data = live_data

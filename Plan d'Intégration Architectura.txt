@@ -33,3 +33,31 @@ Puisqu'on supprime l'IA payante, l'onglet "Race Engineer" dans React change de r
 * **Le "Radio Log" :** Le grand panneau de droite deviendra la retranscription écrite (historique) de tout ce que ton ingénieur audio t'a dit pendant le relais.
 * **Les "Setup Alerts" :** Plutôt qu'un long texte généré par IA, tu auras des étiquettes dures et mathématiques : *[SOUS-VIRAGE DÉTECTÉ: T7 -> Assouplir ARB Avant]*.
 * **Tableau de mixage audio :** Des boutons dans l'UI React pour activer/désactiver certaines voix (Mute Traffic, Mute Fuel warnings, etc.).
+
+
+
+
+
+
+🛠️ Les ajustements stratégiques (Recadrage)
+Le Frontend (React vs Java) : Ton rapport détaille une interface en Java (JavaFX / Spring Boot). Or, tout notre environnement de pointe actuel est codé en React / TypeScript. C'est une excellente chose : le DOM virtuel de React, couplé à notre système de throttling (WebSocket bridé à 20Hz), isole parfaitement l'interface du moteur du jeu. Nous allons conserver cette stack web moderne, qui est tout aussi efficace pour éviter les micro-saccades (stutters) sans subir la lourdeur du ramasse-miettes (Garbage Collector) d'une machine virtuelle Java.
+
+L'Ingénieur Vocal (Le refus du Cloud) : Ta section 7 décrit l'utilisation d'API cloud (OpenAI, Whisper) pour l'agent vocal. Comme nous l'avons strictement acté, notre plateforme doit rester 100% locale, gratuite, avec une latence nulle. En ingénierie des systèmes embarqués, la prévisibilité est reine. Nous n'allons pas dépendre d'un serveur distant. Nous maintenons notre système de machines d'états déterministes couplé à la synthèse locale (pyttsx3) : c'est incassable, instantané et gratuit.
+
+🚀 Ce que nous allons développer et intégrer (Le plan d'action)
+Ton rapport regorge de concepts mathématiques et structurels que nous allons coder et ajouter à notre backend Python et à notre UI React :
+
+1. Sécurisation Anti-Corruption de la Mémoire (Spinlock)
+L'utilisation de la balise mVersionUpdate que tu as décrite est vitale. Actuellement, notre LiveTelemetryThread lit la mémoire brutalement. Nous allons ajouter ce verrou transactionnel : lire la version avant la copie, puis après. Si la version change pendant notre lecture, on jette la trame pour éviter les graphiques erratiques (Race Conditions).
+
+2. Télémétrie Spatiale (Spline et Delta Time)
+Comparer des chronos basés sur le temps ne suffit pas. Nous allons coder l'algorithme qui divise la piste en micro-secteurs d'un mètre (via mLapDist). Cela nous permettra de superposer parfaitement ta trace de freinage avec celle du tour de référence sur l'axe X de la distance dans la DataView.
+
+3. Le Cercle de Friction (G-G Diagram)
+À partir de la vélocité locale et de la vitesse de lacet (Yaw Rate) fournies par les structures C++, nous allons calculer dynamiquement ton Slip Angle. Nous pourrons ainsi dessiner un cercle de friction en direct dans le tableau de bord pour que tu puisses visualiser et perfectionner ton Trailbraking.
+
+4. Gestion Thermodynamique des .svm
+Nous allons automatiser la fonction de ton LMU_SetupManager. Le script Python lira la température de la piste au début de la session, ciblera la fenêtre des 85°C - 95°C pour les gommes, calculera la correction mathématique, et réécrira les pressions à froid dans ton fichier de setup sans que tu n'aies rien à faire.
+
+5. Affinité Matérielle (Isolation CPU)
+Nous allons ajouter un petit script de démarrage qui force les processus Python et le navigateur web (React) à s'exécuter uniquement sur les cœurs d'efficience (E-Cores) de ton processeur, sanctuarisant ainsi 100% de la puissance des cœurs principaux pour Le Mans Ultimate.

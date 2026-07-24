@@ -1,19 +1,49 @@
 import time
 import asyncio
 import json
+import threading
+import multiprocessing # NOUVEAU
+import ctypes        # NOUVEAU
+import os            # NOUVEAU
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-import threading
 
 # Import des scripts Python purs
 from live_telemetry import LiveTelemetryThread 
 from telemetry_data import LMUTelemetryPipeline
 from setup_manager import LMU_SetupManager
 from RaceEngineerLogic import RaceEngineerLogic
-
-# --- NOUVEAUX IMPORTS DES EMPLOYÉS VIRTUELS ---
 from audio_spotter import AudioSpotter
 from live_spotter import LiveSpotterEngine
+
+# ==========================================================
+# ISOLATION MATÉRIELLE (PROTECTION DES FPS DE LMU)
+# ==========================================================
+def isolate_process():
+    """
+    Force le processus Python à s'exécuter UNIQUEMENT sur les 2 derniers cœurs
+    du processeur (E-Cores) pour sanctuariser le Core 0 dédié au jeu.
+    """
+    try:
+        num_cores = multiprocessing.cpu_count()
+        if num_cores >= 4:
+            # Création d'un masque binaire pour cibler les 2 derniers cœurs logiques
+            # Ex pour 8 cœurs: on cible les cœurs 6 et 7.
+            mask = (1 << (num_cores - 1)) | (1 << (num_cores - 2))
+            
+            # Application directe via l'API Windows (Kernel32)
+            pid = ctypes.windll.kernel32.GetCurrentProcess()
+            ctypes.windll.kernel32.SetProcessAffinityMask(pid, mask)
+            
+            print(f"[SYSTEM] Isolation réussie. Backend restreint aux derniers cœurs (Masque: {mask})")
+    except Exception as e:
+        print(f"[SYSTEM] Avertissement: Impossible d'isoler le CPU ({e})")
+
+# On applique l'isolation dès le lancement du fichier
+isolate_process()
+
+# ==========================================================
 
 app = FastAPI(title="LMU Track Engineer API")
 
@@ -82,6 +112,9 @@ def run_ai_diagnostic():
     if df_telemetry is None:
         return {"status": "error", "message": "Aucune donnée de télémétrie dans DuckDB"}
 
+    # --- TRAITEMENT SPATIAL ---
+    df_spatial = pipeline.build_spatial_telemetry(df_telemetry)
+
     sm = LMU_SetupManager(setups_directory=".")
     engineer = RaceEngineerLogic(sm)
     success = engineer.analyze_and_optimize(df_telemetry, session_context, df_competitors)
@@ -91,7 +124,7 @@ def run_ai_diagnostic():
             "status": "success", 
             "report": engineer.diagnostic_report,
             "new_setup": sm.current_setup,
-            "telemetry": df_telemetry.to_dict(orient='records'), 
+            "telemetry": df_spatial.to_dict(orient='records'), # On envoie le DataFrame fusionné
             "laps": df_telemetry[['Lap', 'LapTime', 'Sector1', 'Sector2', 'Sector3', 'Valid']].drop_duplicates().to_dict(orient='records')
         }
     else:

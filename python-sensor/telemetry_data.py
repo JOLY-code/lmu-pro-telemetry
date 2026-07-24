@@ -25,13 +25,14 @@ class LMUTelemetryPipeline:
         query = """
             SELECT 
                 Lap, LapTime, Valid, Sector1, Sector2, Sector3,
+                LapDist, PosX, PosY, PosZ,
                 TireTempFL_I, TireTempFL_M, TireTempFL_O,
                 TireTempFR_I, TireTempFR_M, TireTempFR_O,
                 TireTempRL_I, TireTempRL_M, TireTempRL_O,
                 TireTempRR_I, TireTempRR_M, TireTempRR_O,
                 TirePressFL, TirePressFR, TirePressRL, TirePressRR,
                 TopSpeed, RideHeightFront, RideHeightRear, SuspensionVelocityFL,
-                SteeringAngle, LatAccel, Throttle,
+                SteeringAngle, LatAccel, Throttle, Brake, Gear,
                 WheelSpeedFL, WheelSpeedRL, WheelSlipRL, WheelSlipRR,
                 EngineRPM, TimeAtLimiter, FuelConsumed
             FROM laps_telemetry
@@ -68,7 +69,8 @@ class LMUTelemetryPipeline:
         if not db_file: return None
         con = duckdb.connect(database=db_file, read_only=True)
         try:
-            query = "SELECT TrackName, SessionType, SessionDurationMinutes, AmbientTemp, TrackTemp, RainPathLevel FROM session_info LIMIT 1"
+            # Ajout de VehicleName et VehicleClass pour l'identification de l'IA
+            query = "SELECT TrackName, SessionType, SessionDurationMinutes, AmbientTemp, TrackTemp, RainPathLevel, VehicleName, VehicleClass FROM session_info LIMIT 1"
             df_session = con.execute(query).df()
             con.close()
             if not df_session.empty:
@@ -93,3 +95,39 @@ class LMUTelemetryPipeline:
         except duckdb.Error:
             con.close()
             return None
+
+    def build_spatial_telemetry(self, df_telemetry):
+        """Aligne le dernier tour sur le tour de référence via l'axe de la distance."""
+        if df_telemetry is None or df_telemetry.empty or 'LapDist' not in df_telemetry.columns:
+            return df_telemetry
+            
+        # 1. Identifier le meilleur tour (Référence) et le dernier tour (Le tien)
+        best_lap_num = df_telemetry.loc[df_telemetry['LapTime'].idxmin(), 'Lap']
+        last_lap_num = df_telemetry['Lap'].max()
+        
+        df_ref = df_telemetry[df_telemetry['Lap'] == best_lap_num].copy()
+        df_my = df_telemetry[df_telemetry['Lap'] == last_lap_num].copy()
+        
+        # 2. Création de l'axe spatial (Résolution d'1 mètre)
+        df_ref['Dist_m'] = df_ref['LapDist'].round().astype(int)
+        df_my['Dist_m'] = df_my['LapDist'].round().astype(int)
+        
+        df_ref_agg = df_ref.groupby('Dist_m').mean(numeric_only=True).reset_index()
+        df_my_agg = df_my.groupby('Dist_m').mean(numeric_only=True).reset_index()
+        
+        # 3. Fusion des deux traces sur la même distance
+        df_merged = pd.merge(df_my_agg, df_ref_agg, on='Dist_m', suffixes=('', '_ref'), how='left')
+        
+        # 4. CALCUL PHYSIQUE DU DELTA TIME : dt = dx / v
+        # Conversion de la vitesse de km/h en m/s (On limite à 1.0 m/s minimum pour éviter les divisions par zéro)
+        df_merged['Time_My_sec'] = 1.0 / (df_merged['TopSpeed'] / 3.6).clip(lower=1.0) 
+        df_merged['Time_Ref_sec'] = 1.0 / (df_merged['TopSpeed_ref'] / 3.6).clip(lower=1.0)
+        
+        # Somme cumulée du temps sur le tour
+        df_merged['Cumulative_My'] = df_merged['Time_My_sec'].cumsum()
+        df_merged['Cumulative_Ref'] = df_merged['Time_Ref_sec'].cumsum()
+        
+        # Delta = Mon Temps - Temps de Réf (Négatif = je suis en avance)
+        df_merged['delta'] = df_merged['Cumulative_My'] - df_merged['Cumulative_Ref']
+
+        return df_merged
