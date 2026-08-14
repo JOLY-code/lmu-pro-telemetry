@@ -4,73 +4,92 @@ from datetime import datetime
 class LMU_SetupManager:
     """
     Gestionnaire avancé des fichiers .svm pour Le Mans Ultimate.
-    Gère la lecture, la modification précise, et le versioning des réglages.
+    Gère la lecture par Catégories (Sections) et la manipulation d'Index Entiers.
     """
     def __init__(self, setups_directory):
         self.setups_directory = setups_directory
-        self.current_setup = {}
-        self.metadata = {}
+        self.current_setup = {} # Structure: {'FRONTLEFT': {'CamberSetting': '32'}, ...}
 
-    def parse_svm(self, filename):
+    def parse_svm(self, filename="tempGarage.svm"):
         """
-        Parse un fichier .svm en ignorant les commentaires et en stockant 
-        les paramètres et leurs descriptions.
+        Lit le setup actuel de la voiture dans les stands.
+        Sépare les variables par [SECTIONS] pour ne pas confondre les 4 roues.
         """
         filepath = os.path.join(self.setups_directory, filename)
         if not os.path.exists(filepath):
-            raise FileNotFoundError(f"Setup file not found: {filepath}")
+            print(f"[SYSTEM] Fichier introuvable: {filepath}")
+            return self.current_setup
+
+        current_section = "GENERAL"
+        self.current_setup[current_section] = {}
 
         with open(filepath, 'r', encoding='utf-8') as file:
             for line in file:
                 line = line.strip()
-                if not line or line.startswith('//'):
+                # On ignore les lignes vides ou les commentaires purs
+                if not line or line.startswith('//') and not '=' in line:
                     continue
                 
+                # Détection d'une nouvelle catégorie ex: [FRONTLEFT]
+                if line.startswith('[') and line.endswith(']'):
+                    current_section = line[1:-1]
+                    if current_section not in self.current_setup:
+                        self.current_setup[current_section] = {}
+                    continue
+
+                # Extraction de la variable et de sa valeur
                 if '=' in line:
                     key_part, val_part = line.split('=', 1)
                     key = key_part.strip()
-                    # Le Mans Ultimate stocke parfois des descriptions après la valeur
+                    # On garde la valeur brute (ex: "9") et on retire le commentaire (ex: "//P9")
                     val = val_part.split('//')[0].strip() if '//' in val_part else val_part.strip()
                     
-                    self.current_setup[key] = val
+                    self.current_setup[current_section][key] = val
 
         return self.current_setup
 
-    def modify_parameter(self, parameter_group, key, delta, limit_min=None, limit_max=None):
+    def modify_parameter(self, section, key, delta, limit_min=None, limit_max=None):
         """
-        Modifie une valeur avec des contraintes de sécurité (limites physiques de la voiture).
+        Modifie une valeur par Index (Entier) dans une section précise.
+        Ex: modify_parameter('FRONTLEFT', 'SlowBumpSetting', +1)
         """
-        if key not in self.current_setup:
-            print(f"[WARNING] Parameter '{key}' not found in current setup.")
+        if section not in self.current_setup or key not in self.current_setup[section]:
+            print(f"[WARNING] Paramètre '{key}' introuvable dans la section '[{section}]'.")
             return False
 
         try:
-            current_val = float(self.current_setup[key])
-            new_val = current_val + delta
+            # LMU utilise des Index entiers. Ex: "32" pour 49:51 de Brake Bias.
+            current_val = int(self.current_setup[section][key])
+            new_val = current_val + int(delta)
 
-            # Application des contraintes physiques (pour éviter les setups invalides)
-            if limit_min is not None: new_val = max(limit_min, new_val)
-            if limit_max is not None: new_val = min(limit_max, new_val)
+            # Application des contraintes de sécurité
+            if limit_min is not None: new_val = max(int(limit_min), new_val)
+            if limit_max is not None: new_val = min(int(limit_max), new_val)
 
-            self.current_setup[key] = f"{new_val:.3f}"
-            print(f"[SETUP] {parameter_group} -> {key} updated: {current_val} -> {new_val:.3f}")
+            self.current_setup[section][key] = str(new_val)
+            print(f"[SETUP IA] [{section}] {key} optimisé : {current_val} -> {new_val}")
             return True
         except ValueError:
-            print(f"[ERROR] Cannot apply delta to non-numeric parameter: {key}")
+            print(f"[ERROR] Le paramètre {key} n'est pas un index modifiable.")
             return False
 
-    def export_optimized_setup(self, base_filename, track_name, iteration_tag):
+    def export_optimized_setup(self, track_name="Track", base_filename="OptimizedSetup"):
         """
-        Exporte le nouveau setup avec un nommage strict pour le versioning.
-        Ex: LeMans_Hypercar_Base_v1.1_AeroTweak.svm
+        Sauvegarde le setup modifié en réécrivant proprement les sections.
         """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-        new_filename = f"{track_name}_{base_filename}_v{iteration_tag}_{timestamp}.svm"
+        new_filename = f"{track_name}_{base_filename}_{timestamp}.svm"
         filepath = os.path.join(self.setups_directory, new_filename)
 
         with open(filepath, 'w', encoding='utf-8') as file:
-            file.write(f"// Setup generated by LMU Track Engineer AI at {timestamp}\n")
-            for key, val in self.current_setup.items():
-                file.write(f"{key}={val}\n")
+            file.write(f"// Setup généré par LMU Track Engineer AI ({timestamp})\n\n")
+            
+            for section, params in self.current_setup.items():
+                file.write(f"[{section}]\n")
+                for key, val in params.items():
+                    # On réécrit au format LMU (On perd les commentaires texte, mais LMU s'en moque)
+                    file.write(f"{key}={val}\n")
+                file.write("\n")
         
+        print(f"[SYSTEM] Nouveau setup sauvegardé : {new_filename}")
         return filepath

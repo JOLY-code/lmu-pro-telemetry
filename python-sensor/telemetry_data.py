@@ -22,30 +22,47 @@ class LMUTelemetryPipeline:
         if not db_file: return None
         con = duckdb.connect(database=db_file, read_only=True)
         
+        # Requête 100% PLUG & PLAY avec les GUILLEMETS OBLIGATOIRES pour DuckDB
         query = """
             SELECT 
-                Lap, LapTime, Valid, Sector1, Sector2, Sector3,
-                LapDist, PosX, PosY, PosZ,
-                TireTempFL_I, TireTempFL_M, TireTempFL_O,
-                TireTempFR_I, TireTempFR_M, TireTempFR_O,
-                TireTempRL_I, TireTempRL_M, TireTempRL_O,
-                TireTempRR_I, TireTempRR_M, TireTempRR_O,
-                TirePressFL, TirePressFR, TirePressRL, TirePressRR,
-                TopSpeed, RideHeightFront, RideHeightRear, SuspensionVelocityFL,
-                SteeringAngle, LatAccel, Throttle, Brake, Gear,
-                WheelSpeedFL, WheelSpeedRL, WheelSlipRL, WheelSlipRR,
-                EngineRPM, TimeAtLimiter, FuelConsumed
+                "Lap", "Lap Time", "Valid", "Sector1", "Sector2", "Sector3", "Lap Dist",
+                "TyresTempLeft", "TyresTempCentre", "TyresTempRight", "TyresCarcassTemp",
+                "TyresPressure", "Tyres Wear",
+                "Ground Speed", "FrontRideHeight", "RearRideHeight",
+                "Susp Pos", "Steered Angle", "Yaw Rate", "G Force Lat", "G Force Long",
+                "Throttle Pos", "Brake Pos", "Gear", "Fuel Level",
+                "Virtual Energy", "SoC", "Brake Thickness", "Wheel Speed",
+                "GPS Latitude" as GPS_Lat, "GPS Longitude" as GPS_Lon
             FROM laps_telemetry
-            WHERE Valid = 1 AND LapTime > 0
-            ORDER BY Lap ASC
+            WHERE "Valid" = 1 AND "Lap Time" > 0
+            ORDER BY "Lap" ASC, "Lap Dist" ASC
         """
         try:
-            df_stint = con.execute(query).df()
+            df = con.execute(query).df()
             con.close()
-            if df_stint.empty: return None
-            max_acceptable_time = df_stint['LapTime'].min() * 1.05
-            return df_stint[df_stint['LapTime'] <= max_acceptable_time]
-        except duckdb.Error:
+            if df.empty: return None
+            
+            # --- NORMALISATION MATHÉMATIQUE POUR L'IA ---
+            # On traduit le dictionnaire LMU en vecteurs d'ingénierie standard
+            df.rename(columns={
+                'Lap Time': 'LapTime',
+                'Lap Dist': 'LapDist',
+                'Ground Speed': 'TopSpeed',
+                'G Force Lat': 'LatAccel',
+                'G Force Long': 'LongAccel',
+                'Steered Angle': 'SteeringAngle',
+                'Yaw Rate': 'YawRate',
+                'Throttle Pos': 'Throttle',
+                'Brake Pos': 'Brake',
+                'Fuel Level': 'FuelConsumed',
+                'Susp Pos': 'SuspensionPos'
+            }, inplace=True, errors='ignore')
+            
+            # Filtre les anomalies (tours de sortie lents)
+            max_acceptable_time = df['LapTime'].min() * 1.05
+            return df[df['LapTime'] <= max_acceptable_time]
+        except duckdb.Error as e:
+            print(f"[SQL ERROR] Échec de lecture Plug & Play : {e}")
             con.close()
             return None
     

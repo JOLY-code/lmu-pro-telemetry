@@ -7,25 +7,23 @@ class LiveSpotterEngine(threading.Thread):
         self.telemetry = telemetry_engine
         self.audio = audio_spotter
         self.running = True
+        self.session_start_time = time.time() # NOUVEAU: Délai d'activation dicté par l'audit
         
-        # --- MACHINES D'ÉTATS (Mémoire du Spotter) ---
+        # --- MACHINES D'ÉTATS ---
         self.pit_entry_learned = False
         self.pit_entry_dist = 0.0
         self.warned_pit_limiter = False
-        
         self.last_yellow_flag = 0
         self.last_damage = 0.0
         self.last_engine_damage = 0.0
         self.last_penalties = 0
         self.rain_warned = False
         
-        # Variables de calculs sur plusieurs tours
         self.last_lap_distance = 0.0
         self.laps_completed = 0
         self.fuel_at_lap_start = -1.0
-        self.last_lap_fuel_usage = 0.0
-        
-        # Accumulateurs pour les comportements abusifs (Éviter le spam)
+        self.fuel_history = [] # NOUVEAU: Fenêtre glissante pour l'essence
+
         self.abs_abuse_counter = 0
         self.tc_abuse_counter = 0
         self.bottoming_counter = 0
@@ -63,31 +61,30 @@ class LiveSpotterEngine(threading.Thread):
     # =========================================================================
 
     def _track_lap_progress(self, data):
-        """Compte les tours, calcule la conso moyenne et conseille sur le Brake Bias."""
         current_dist = data.get('MyLapDist', 0)
         current_fuel = data.get('FuelLevel', 0)
         
-        # Détection du franchissement de la ligne d'arrivée
         if self.last_lap_distance > 3000 and current_dist < 100:
             self.laps_completed += 1
             
-            # Calcul de la consommation exacte sur le tour
             if self.fuel_at_lap_start > 0:
-                self.last_lap_fuel_usage = self.fuel_at_lap_start - current_fuel
-                
-                # --- STRATÉGIE ESSENCE ---
-                if self.laps_completed >= 2 and self.last_lap_fuel_usage > 0:
-                    laps_left = current_fuel / self.last_lap_fuel_usage
+                usage = self.fuel_at_lap_start - current_fuel
+                if usage > 0:
+                    # MODÈLE MATHÉMATIQUE : Fenêtre glissante de l'Audit
+                    self.fuel_history.append(usage)
+                    if len(self.fuel_history) > 5: 
+                        self.fuel_history.pop(0)
+                        
+                    avg_usage = sum(self.fuel_history) / len(self.fuel_history)
+                    laps_left = current_fuel / avg_usage
+                    
                     if laps_left < 2.5:
-                        self.audio.say("Fuel level critical. We only have fuel for two laps. Box this lap.", "fuel_box", cooldown=180)
+                        self.audio.say("Fuel level critical. Box this lap.", "fuel_box", cooldown=180)
                     elif laps_left < 5.0:
-                        self.audio.say("We are short on fuel to reach the target. Start lift and coast to save energy.", "fuel_save", cooldown=300)
+                        self.audio.say("Start lift and coast to save energy.", "fuel_save", cooldown=300)
             
-            # --- CONSEIL BRAKE BIAS (Migration de Poids) ---
-            # Si on a brûlé plus de 40 Litres depuis le début du relais
-            # L'arrière est plus léger, on déplace le freinage vers l'avant
-            if self.laps_completed % 10 == 0: # Tous les 10 tours environ
-                self.audio.say("Fuel load is dropping. Consider moving brake bias forward one or two clicks.", "bias_migration", cooldown=1800)
+            if self.laps_completed % 10 == 0:
+                self.audio.say("Fuel load is dropping. Consider moving brake bias forward.", "bias_migration", cooldown=1800)
 
             self.fuel_at_lap_start = current_fuel
 
@@ -147,31 +144,54 @@ class LiveSpotterEngine(threading.Thread):
                 self.warned_pit_limiter = False
 
     def _analyze_traffic_and_strategy(self, data):
-        if data.get('BlueFlag', 0) > 0:
-            self.audio.say("Faster car approaching. Let them pass safely.", "blue_flag", cooldown=30)
+        import math
+        
+        # Délai d'activation de 5 secondes au départ pour éviter la cacophonie (Exigence Audit)
+        if time.time() - self.session_start_time < 5.0:
+            return
         
         my_dist = data.get('MyLapDist', 0)
         my_speed = data.get('Speed', 0)
+        my_class = data.get('MyClass', 'Unknown')
+        my_x = data.get('MyPosX', 0.0)
+        my_z = data.get('MyPosZ', 0.0)
         
         if my_speed > 80:
+            cars_alongside = 0
+            
             for comp in data.get('CompetitorsLive', []):
-                gap = comp['lap_dist'] - my_dist
+                gap_dist = comp['lap_dist'] - my_dist
+                comp_class = comp.get('class', 'Unknown')
                 
-                # 1. Défense (Voiture collée derrière)
-                if -60 < gap < -15: 
-                    self.audio.say("Traffic close behind, hold your line.", "traffic_behind", cooldown=45)
-                    break
+                # MODÈLE MATHÉMATIQUE : Calcul Euclidien 3D pour le Three-Wide
+                comp_x = comp.get('pos_x', 0.0)
+                comp_z = comp.get('pos_z', 0.0)
+                euclidean_dist = math.sqrt((comp_x - my_x)**2 + (comp_z - my_z)**2)
+                
+                if abs(gap_dist) < 4.0 and 1.5 < euclidean_dist < 6.0:
+                    cars_alongside += 1
+                
+                # LOGIQUE MULTICLASSE (Analyse des drapeaux bleus prédictifs)
+                if my_class != comp_class and comp_class != 'Unknown':
+                    # Si on est en Hypercar/LMP2 et qu'une GT est devant
+                    if gap_dist > 0 and gap_dist < 150 and any(p in my_class for p in ["Hyper", "LMP"]):
+                        if "GT" in comp_class:
+                            self.audio.say("Slower class car ahead. Prepare to lap them safely.", "lap_traffic", cooldown=45)
+                    # Si on est en GT et qu'un prototype arrive derrière
+                    elif gap_dist < 0 and gap_dist > -150 and "GT" in my_class:
+                        if any(p in comp_class for p in ["Hyper", "LMP"]):
+                            self.audio.say("Faster class prototype approaching behind. Hold your line.", "prototype_behind", cooldown=45)
+                
+                # LOGIQUE STANDARD (Même classe)
+                else:
+                    if -60 < gap_dist < -15: 
+                        self.audio.say("Traffic close behind, hold your line.", "traffic_behind", cooldown=45)
+                    elif 10 < gap_dist < 300 and comp.get('in_pits', 0) == 1:
+                        self.audio.say("Car ahead is pitting. Push now for the undercut.", "undercut", cooldown=600)
                     
-                # 2. Dépassement imminent (Voiture lente juste devant)
-                elif 30 < gap < 100:
-                    self.audio.say("Slower car ahead. Prepare to overtake.", "slower_car", cooldown=45)
-                    break
-                    
-                # 3. Stratégie Undercut (Voiture lointaine qui rentre aux stands)
-                elif 10 < gap < 300 and comp.get('in_pits', 0) == 1:
-                    self.audio.say("Car ahead is pitting. This is your in-lap, push now for the undercut.", "undercut", cooldown=600)
-                    break
-
+            if cars_alongside >= 2:
+                self.audio.say("Three wide! Three wide! Hold your line!", "three_wide", cooldown=10)
+                
     # =========================================================================
     # 2. CAR HEALTH & WEATHER
     # =========================================================================

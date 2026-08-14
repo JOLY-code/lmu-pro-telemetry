@@ -4,63 +4,173 @@ import ctypes
 import threading
 
 # ==============================================================================
-# MAPPING EXHAUSTIF DE LA STRUCTURE C++ (rFactor 2 / LMU Engine)
-# LA VUE OMNISCIENTE (PHYSIQUE + CHRONOMÉTRAGE LIVE)
+# ALIGNEMENT STRICT AVEC rF2 / LMU InternalsPlugin.hpp (Version 08)
 # ==============================================================================
 
-class rF2VehicleTelemetry(ctypes.Structure):
-    """Structure C++ stricte de la PHYSIQUE d'un véhicule"""
+class TelemVect3(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double), ("z", ctypes.c_double)]
+
+class TelemWheelV01(ctypes.Structure):
+    _fields_ = [
+        ("mSuspensionDeflection", ctypes.c_double),
+        ("mRideHeight", ctypes.c_double),
+        ("mSuspForce", ctypes.c_double),
+        ("mBrakeTemp", ctypes.c_double),
+        ("mBrakePressure", ctypes.c_double),
+        ("mRotation", ctypes.c_double),
+        ("mLateralPatchVel", ctypes.c_double),
+        ("mLongitudinalPatchVel", ctypes.c_double),
+        ("mLateralGroundVel", ctypes.c_double),
+        ("mLongitudinalGroundVel", ctypes.c_double),
+        ("mCamber", ctypes.c_double),
+        ("mLateralForce", ctypes.c_double),
+        ("mLongitudinalForce", ctypes.c_double),
+        ("mTireLoad", ctypes.c_double),
+        ("mGripFract", ctypes.c_double),
+        ("mPressure", ctypes.c_double),
+        ("mTemperature", ctypes.c_double * 3), 
+        ("mWear", ctypes.c_double),
+        ("mTerrainName", ctypes.c_char * 16),
+        ("mSurfaceType", ctypes.c_uint8),
+        ("mFlat", ctypes.c_bool),
+        ("mDetached", ctypes.c_bool),
+        ("mStaticUndeflectedRadius", ctypes.c_uint8),
+        ("mVerticalTireDeflection", ctypes.c_double),
+        ("mWheelYLocation", ctypes.c_double),
+        ("mToe", ctypes.c_double),
+        ("mTireCarcassTemperature", ctypes.c_double), 
+        ("mTireInnerLayerTemperature", ctypes.c_double * 3),
+        ("mOptimalTemp", ctypes.c_float),
+        ("mCompoundIndex", ctypes.c_uint8),
+        ("mCompoundType", ctypes.c_uint8),
+        ("mExpansion", ctypes.c_uint8 * 18)
+    ]
+
+class TelemInfoV01(ctypes.Structure):
     _fields_ = [
         ("mID", ctypes.c_int32),
+        ("mDeltaTime", ctypes.c_double),
+        ("mElapsedTime", ctypes.c_double),
+        ("mLapNumber", ctypes.c_int32),
+        ("mLapStartET", ctypes.c_double),
+        ("mVehicleName", ctypes.c_char * 64),
+        ("mTrackName", ctypes.c_char * 64),
+        ("mPos", TelemVect3),
+        ("mLocalVel", TelemVect3),
+        ("mLocalAccel", TelemVect3),
+        ("mOri", TelemVect3 * 3),
+        ("mLocalRot", TelemVect3),
+        ("mLocalRotAccel", TelemVect3),
+        ("mGear", ctypes.c_int32),
         ("mEngineRPM", ctypes.c_double),
         ("mEngineWaterTemp", ctypes.c_double),
         ("mEngineOilTemp", ctypes.c_double),
         ("mClutchRPM", ctypes.c_double),
         ("mUnfilteredThrottle", ctypes.c_double),
         ("mUnfilteredBrake", ctypes.c_double),
-        ("mFilteredThrottle", ctypes.c_double),   
+        ("mUnfilteredSteering", ctypes.c_double),
+        ("mUnfilteredClutch", ctypes.c_double),
+        ("mFilteredThrottle", ctypes.c_double),
         ("mFilteredBrake", ctypes.c_double),
-        ("mSteeringWheelAngle", ctypes.c_double),
-        ("mSteeringShaftTorque", ctypes.c_double), 
-        ("mFrontDownforce", ctypes.c_double),      
-        ("mRearDownforce", ctypes.c_double),       
-        ("mDrag", ctypes.c_double),                
-        ("mElectricBoostMotorRPM", ctypes.c_double), 
-        ("mElectricBoostMotorTorque", ctypes.c_double),
-        ("mBatteryCharge", ctypes.c_double),
-        ("mSuspensionDeflection", ctypes.c_double * 4),
-        ("mRideHeight", ctypes.c_double * 4),
-        ("mTireTemp", ctypes.c_double * 4 * 3),
-        ("mBrakeTemp", ctypes.c_double * 4),
-        ("mTireWear", ctypes.c_double * 4),
-        ("mAeroDamage", ctypes.c_double),
-        ("mEngineDamage", ctypes.c_double),
-        ("mGForce", ctypes.c_double * 3),
-        ("mPos", ctypes.c_double * 3),
-        ("mIsPlayer", ctypes.c_int8),
-        ("mGear", ctypes.c_int32),
+        ("mFilteredSteering", ctypes.c_double),
+        ("mFilteredClutch", ctypes.c_double),
+        ("mSteeringShaftTorque", ctypes.c_double),
+        ("mFront3rdDeflection", ctypes.c_double),
+        ("mRear3rdDeflection", ctypes.c_double),
+        ("mFrontWingHeight", ctypes.c_double),
+        ("mFrontRideHeight", ctypes.c_double),
+        ("mRearRideHeight", ctypes.c_double),
+        ("mDrag", ctypes.c_double),
+        ("mFrontDownforce", ctypes.c_double),
+        ("mRearDownforce", ctypes.c_double),
         ("mFuel", ctypes.c_double),
         ("mEngineMaxRPM", ctypes.c_double),
-        ("mTirePressure", ctypes.c_double * 4),
-        ("mWheelRotation", ctypes.c_double * 4),
-        ("mLocalVel", ctypes.c_double * 3),
-        ("mTireLoad", ctypes.c_double * 4),     
-        ("mGripFract", ctypes.c_double * 4),    
-        ("mSuspensionVelocity", ctypes.c_double * 4),
-        ("mBrakeBias", ctypes.c_double),
+        ("mScheduledStops", ctypes.c_uint8),
+        ("mOverheating", ctypes.c_bool),
+        ("mDetached", ctypes.c_bool),
+        ("mHeadlights", ctypes.c_bool),
+        ("mDentSeverity", ctypes.c_uint8 * 8),
+        ("mLastImpactET", ctypes.c_double),
+        ("mLastImpactMagnitude", ctypes.c_double),
+        ("mLastImpactPos", TelemVect3),
+        ("mEngineTorque", ctypes.c_double),
+        ("mCurrentSector", ctypes.c_int32),
+        ("mSpeedLimiter", ctypes.c_uint8),
+        ("mMaxGears", ctypes.c_uint8),
+        ("mFrontTireCompoundIndex", ctypes.c_uint8),
+        ("mRearTireCompoundIndex", ctypes.c_uint8),
+        ("mFuelCapacity", ctypes.c_double),
+        ("mFrontFlapActivated", ctypes.c_uint8),
+        ("mRearFlapActivated", ctypes.c_uint8),
+        ("mRearFlapLegalStatus", ctypes.c_uint8),
+        ("mIgnitionStarter", ctypes.c_uint8),
+        ("mFrontTireCompoundName", ctypes.c_char * 18),
+        ("mRearTireCompoundName", ctypes.c_char * 18),
+        ("mSpeedLimiterAvailable", ctypes.c_uint8),
+        ("mAntiStallActivated", ctypes.c_uint8),
+        ("mUnused", ctypes.c_uint8 * 2),
+        ("mVisualSteeringWheelRange", ctypes.c_float),
+        ("mRearBrakeBias", ctypes.c_double),
+        ("mTurboBoostPressure", ctypes.c_double),
+        ("mPhysicsToGraphicsOffset", ctypes.c_float * 3),
+        ("mPhysicalSteeringWheelRange", ctypes.c_float),
+        ("mDeltaBest", ctypes.c_double),
+        ("mBatteryChargeFraction", ctypes.c_double),
+        ("mElectricBoostMotorTorque", ctypes.c_double),
+        ("mElectricBoostMotorRPM", ctypes.c_double),
+        ("mElectricBoostMotorTemperature", ctypes.c_double),
+        ("mElectricBoostWaterTemperature", ctypes.c_double),
+        ("mElectricBoostMotorState", ctypes.c_uint8),
+        ("mLapInvalidated", ctypes.c_bool),
+        ("mABSActive", ctypes.c_bool),
+        ("mTCActive", ctypes.c_bool),
+        ("mSpeedLimiterActive", ctypes.c_bool),
+        ("mWiperState", ctypes.c_uint8),
+        ("mTC", ctypes.c_uint8),
+        ("mTCMax", ctypes.c_uint8),
+        ("mTCSlip", ctypes.c_uint8),
+        ("mTCSlipMax", ctypes.c_uint8),
+        ("mTCCut", ctypes.c_uint8),
+        ("mTCCutMax", ctypes.c_uint8),
+        ("mABS", ctypes.c_uint8),
+        ("mABSMax", ctypes.c_uint8),
+        ("mMotorMap", ctypes.c_uint8),
+        ("mMotorMapMax", ctypes.c_uint8),
+        ("mMigration", ctypes.c_uint8),
+        ("mMigrationMax", ctypes.c_uint8),
+        ("mFrontAntiSway", ctypes.c_uint8),
+        ("mFrontAntiSwayMax", ctypes.c_uint8),
+        ("mRearAntiSway", ctypes.c_uint8),
+        ("mRearAntiSwayMax", ctypes.c_uint8),
+        ("mLiftAndCoastProgress", ctypes.c_uint8),
+        ("mTrackLimitsSteps", ctypes.c_uint8),
+        ("mRegen", ctypes.c_float),
+        ("mSoC", ctypes.c_float),
+        ("mVirtualEnergy", ctypes.c_float),
+        ("mTimeGapCarAhead", ctypes.c_float),
+        ("mTimeGapCarBehind", ctypes.c_float),
+        ("mTimeGapPlaceAhead", ctypes.c_float),
+        ("mTimeGapPlaceBehind", ctypes.c_float),
+        ("mVehicleModel", ctypes.c_char * 30),
+        ("mVehicleClass", ctypes.c_uint8),
+        ("mVehicleChampionship", ctypes.c_uint8),
+        ("mExpansion", ctypes.c_uint8 * 20),
+        ("mWheel", TelemWheelV01 * 4) 
     ]
 
 class rF2TelemetryArray(ctypes.Structure):
+    _pack_ = 4
     _fields_ = [
         ("mVersionUpdateBegin", ctypes.c_int32),
         ("mVersionUpdateEnd", ctypes.c_int32),
         ("mBytesUpdated", ctypes.c_int32),
         ("mNumVehicles", ctypes.c_int32),
-        ("mVehicles", rF2VehicleTelemetry * 128),
+        ("mVehicles", TelemInfoV01 * 128)
     ]
 
+# CORRECTION CRITIQUE : Alignement exact sur VehicleScoringInfoV01
 class rF2VehicleScoring(ctypes.Structure):
-    """Structure de CHRONOMÉTRAGE LIVE d'un véhicule."""
+    _pack_ = 4
     _fields_ = [
         ("mID", ctypes.c_int32),
         ("mDriverName", ctypes.c_char * 32),
@@ -80,31 +190,91 @@ class rF2VehicleScoring(ctypes.Structure):
         ("mCurSector1", ctypes.c_double),
         ("mCurSector2", ctypes.c_double),
         ("mNumPitstops", ctypes.c_int16),
-        ("mPenalties", ctypes.c_int16),
-        ("mIsPlayer", ctypes.c_int8),
-        ("mInPits", ctypes.c_int8),
-        ("mPlace", ctypes.c_int8),
-        ("mClass", ctypes.c_char * 32),
-        ("mFrontTireCompoundName", ctypes.c_char * 18), 
-        ("mRearTireCompoundName", ctypes.c_char * 18),
+        ("mNumPenalties", ctypes.c_int16),
+        ("mIsPlayer", ctypes.c_bool),
+        ("mControl", ctypes.c_int8),
+        ("mInPits", ctypes.c_bool),
+        ("mPlace", ctypes.c_uint8),
+        ("mVehicleClass", ctypes.c_char * 32),
+        ("mTimeBehindNext", ctypes.c_double),
+        ("mLapsBehindNext", ctypes.c_int32),
+        ("mTimeBehindLeader", ctypes.c_double),
+        ("mLapsBehindLeader", ctypes.c_int32),
+        ("mLapStartET", ctypes.c_double),
+        ("mPos", TelemVect3),
+        ("mLocalVel", TelemVect3),
+        ("mLocalAccel", TelemVect3),
+        ("mOri", TelemVect3 * 3),
+        ("mLocalRot", TelemVect3),
+        ("mLocalRotAccel", TelemVect3),
+        ("mHeadlights", ctypes.c_uint8),
+        ("mPitState", ctypes.c_uint8),
+        ("mServerScored", ctypes.c_uint8),
+        ("mIndividualPhase", ctypes.c_uint8),
+        ("mQualification", ctypes.c_int32),
+        ("mTimeIntoLap", ctypes.c_double),
+        ("mEstimatedLapTime", ctypes.c_double),
+        ("mPitGroup", ctypes.c_char * 24),
+        ("mFlag", ctypes.c_uint8),
+        ("mUnderYellow", ctypes.c_bool),
+        ("mCountLapFlag", ctypes.c_uint8),
+        ("mInGarageStall", ctypes.c_bool),
+        ("mUpgradePack", ctypes.c_uint8 * 16),
+        ("mPitLapDist", ctypes.c_float),
+        ("mBestLapSector1", ctypes.c_float),
+        ("mBestLapSector2", ctypes.c_float),
+        ("mSteamID", ctypes.c_uint64),
+        ("mVehFilename", ctypes.c_char * 32),
+        ("mAttackMode", ctypes.c_int16),
+        ("mFuelFraction", ctypes.c_uint8),
+        ("mDRSState", ctypes.c_bool),
+        ("mExpansion", ctypes.c_uint8 * 4)
     ]
 
+# Mapping de la structure de base Scoring gérée par le plugin Shared Memory
 class rF2ScoringInfo(ctypes.Structure):
-    """Structure C++ de la course AVEC LE TABLEAU DES JOUEURS"""
+    _pack_ = 4
     _fields_ = [
         ("mTrackName", ctypes.c_char * 64),
         ("mSession", ctypes.c_int32),
         ("mCurrentET", ctypes.c_double),
         ("mEndET", ctypes.c_double),
-        ("mTrackTemp", ctypes.c_double),
-        ("mAmbientTemp", ctypes.c_double),
-        ("mRaining", ctypes.c_double),
-        ("mYellowFlagState", ctypes.c_int8),
-        ("mBlueFlag", ctypes.c_int8),
-        ("mInPits", ctypes.c_int8),
-        ("mPenalties", ctypes.c_int32),
+        ("mMaxLaps", ctypes.c_int32),
+        ("mLapDist", ctypes.c_double),
+        ("mResultsStream", ctypes.c_uint8 * 8), # Ignoré (Pointeur interne)
         ("mNumVehicles", ctypes.c_int32),
-        ("mVehicles", rF2VehicleScoring * 128),
+        ("mGamePhase", ctypes.c_uint8),
+        ("mYellowFlagState", ctypes.c_int8),
+        ("mSectorFlag", ctypes.c_int8 * 3),
+        ("mStartLight", ctypes.c_uint8),
+        ("mNumRedLights", ctypes.c_uint8),
+        ("mInRealtime", ctypes.c_bool),
+        ("mPlayerName", ctypes.c_char * 32),
+        ("mPlrFileName", ctypes.c_char * 64),
+        ("mDarkCloud", ctypes.c_double),
+        ("mRaining", ctypes.c_double),
+        ("mAmbientTemp", ctypes.c_double),
+        ("mTrackTemp", ctypes.c_double),
+        ("mWind", TelemVect3),
+        ("mMinPathWetness", ctypes.c_double),
+        ("mMaxPathWetness", ctypes.c_double),
+        ("mGameMode", ctypes.c_uint8),
+        ("mIsPasswordProtected", ctypes.c_bool),
+        ("mServerPort", ctypes.c_uint16),
+        ("mServerPublicIP", ctypes.c_uint32),
+        ("mMaxPlayers", ctypes.c_int32),
+        ("mServerName", ctypes.c_char * 32),
+        ("mStartET", ctypes.c_float),
+        ("mAvgPathWetness", ctypes.c_double),
+        ("mSessionTimeRemaining", ctypes.c_float),
+        ("mTimeOfDay", ctypes.c_float),
+        ("mIsFixedSetup", ctypes.c_bool),
+        ("mTrackGripLevel", ctypes.c_uint8),
+        ("mCloudCoverage", ctypes.c_uint8),
+        ("mTrackLimitsStepsPerPenalty", ctypes.c_uint8),
+        ("mTrackLimitsStepsPerPoint", ctypes.c_uint8),
+        ("mExpansion", ctypes.c_uint8 * 187),
+        ("mVehicles", rF2VehicleScoring * 128)
     ]
 
 # ==============================================================================
@@ -117,15 +287,23 @@ class LiveTelemetryThread(threading.Thread):
         self.running = True
         self.telemetry_mmap = None
         self.scoring_mmap = None
-        self.latest_data = None # Remplace le pyqtSignal pour stocker la donnée brute
+        self.latest_data = None
 
     def _connect_to_lmu_memory(self):
         try:
+            # 1. On tente d'abord le plugin rF2 classique (Si installé via SimHub/CrewChief)
             self.telemetry_mmap = mmap.mmap(0, ctypes.sizeof(rF2TelemetryArray), "$rFactor2SMMP_Telemetry$", access=mmap.ACCESS_READ)
             self.scoring_mmap = mmap.mmap(0, ctypes.sizeof(rF2ScoringInfo), "$rFactor2SMMP_Scoring$", access=mmap.ACCESS_READ)
             return True
         except FileNotFoundError:
-            return False
+            try:
+                # 2. S'il n'est pas là, on utilise la nouvelle mémoire native LMU (LMU_Data)
+                self.telemetry_mmap = mmap.mmap(0, 65536, "LMU_Data", access=mmap.ACCESS_READ)
+                # Note: La structure LMU_Data globale nécessite un mapping différent, 
+                # on garde cette connexion en fallback prêt pour notre future évolution.
+                return True
+            except FileNotFoundError:
+                return False
 
     def run(self):
         print("[SONDE] Tentative de connexion (Mode Read-Only Anti-Cheat)...")
@@ -135,14 +313,10 @@ class LiveTelemetryThread(threading.Thread):
 
         while self.running:
             try:
-                # --- 1. SÉCURISATION ANTI-CORRUPTION (Spinlock) ---
                 self.telemetry_mmap.seek(0)
                 raw_telemetry = self.telemetry_mmap.read(ctypes.sizeof(rF2TelemetryArray))
                 telemetry_array = rF2TelemetryArray.from_buffer_copy(raw_telemetry)
                 
-                # Vérification de l'intégrité de la trame (Race Condition)
-                # Si Begin et End sont différents, le jeu était en train d'écrire pendant notre lecture.
-                # On jette immédiatement la trame pour protéger l'analyse.
                 if telemetry_array.mVersionUpdateBegin != telemetry_array.mVersionUpdateEnd:
                     continue 
                 
@@ -157,18 +331,19 @@ class LiveTelemetryThread(threading.Thread):
                 # 2. Extraction du Live Timing (Scoring)
                 for i in range(scoring_data.mNumVehicles):
                     score_car = scoring_data.mVehicles[i]
-                    if score_car.mIsPlayer == 1:
+                    if score_car.mIsPlayer:
                         my_score = score_car
-                    else:
+                    elif score_car.mLapDist > 0:
                         competitors.append({
                             'id': score_car.mID,
                             'name': score_car.mDriverName.decode('utf-8', errors='ignore'),
-                            'class': score_car.mClass.decode('utf-8', errors='ignore'),
+                            'class': score_car.mVehicleClass.decode('utf-8', errors='ignore'),
                             'position': score_car.mPlace,
                             'last_lap': score_car.mLastLapTime,
                             'lap_dist': score_car.mLapDist,
                             'in_pits': score_car.mInPits,
-                            'front_tire': score_car.mFrontTireCompoundName.decode('utf-8', errors='ignore')
+                            'pos_x': score_car.mPos.x, 
+                            'pos_z': score_car.mPos.z  
                         })
 
                 # 3. Extraction de la Physique (Telemetry)
@@ -178,23 +353,23 @@ class LiveTelemetryThread(threading.Thread):
                         my_phys = phys_car
                         break
 
-                # 4. Packaging global E-Sport (Avec toutes les variables Spotter)
+                # 4. Packaging global E-Sport
                 if my_phys and my_score:
                     live_data = {
-                        # Direction de course
                         'Time': scoring_data.mCurrentET, 
                         'TrackTemp': scoring_data.mTrackTemp,
                         'RainIntensity': scoring_data.mRaining, 
                         'YellowFlag': scoring_data.mYellowFlagState,
                         'BlueFlag': scoring_data.mBlueFlag,
-                        'Penalties': scoring_data.mPenalties, # Ajouté pour le Spotter
+                        'Penalties': my_score.mNumPenalties, 
                         
-                        # Ton Live Timing
                         'MyPosition': my_score.mPlace, 
                         'MyLapDist': my_score.mLapDist,
                         'MyLastLap': my_score.mLastLapTime,
+                        'MyClass': my_score.mVehicleClass.decode('utf-8', errors='ignore'), 
+                        'MyPosX': my_score.mPos.x,
+                        'MyPosZ': my_score.mPos.z,
                         
-                        # Ta Physique & Électronique
                         'Speed': my_phys.mEngineRPM * 0.03, 
                         'Throttle': my_phys.mUnfilteredThrottle * 100.0,
                         'FilteredThrottle': my_phys.mFilteredThrottle * 100.0, 
@@ -202,51 +377,55 @@ class LiveTelemetryThread(threading.Thread):
                         'FilteredBrake': my_phys.mFilteredBrake * 100.0, 
                         'Steering': my_phys.mSteeringWheelAngle * 57.2958,
                         
-                        # Aéro & Santé Moteur
                         'FrontDownforceN': my_phys.mFrontDownforce,
                         'RearDownforceN': my_phys.mRearDownforce,
                         'DragN': my_phys.mDrag,
                         'Gear': my_phys.mGear, 
                         'FuelLevel': my_phys.mFuel, 
-                        'BatteryCharge': my_phys.mBatteryCharge * 100.0,
-                        'EngineWaterTemp': my_phys.mEngineWaterTemp, # Ajouté pour le Spotter
-                        'EngineDamage': my_phys.mEngineDamage,       # Ajouté pour le Spotter
+                        'VirtualEnergy': my_phys.mVirtualEnergy * 100.0, 
+                        'SoC': my_phys.mSoC * 100.0,                     
+                        'BatteryCharge': my_phys.mBatteryChargeFraction * 100.0,
+                        'EngineWaterTemp': my_phys.mEngineWaterTemp,
+                        'TireCarcassFL': my_phys.mWheel[0].mTireCarcassTemperature - 273.15, # Kelvin to Celcius
+                        'TireCarcassFR': my_phys.mWheel[1].mTireCarcassTemperature - 273.15,
+                        'TireCarcassRL': my_phys.mWheel[2].mTireCarcassTemperature - 273.15,
+                        'TireCarcassRR': my_phys.mWheel[3].mTireCarcassTemperature - 273.15,
+                        'EngineDamage': my_phys.mEngineDamage,
                         'AeroDamage': my_phys.mAeroDamage,
-                        'BrakeBias': my_phys.mBrakeBias,
+                        'BrakeBias': my_phys.mRearBrakeBias * 100.0,
 
-                        # --- CERCLE DE FRICTION (G-Forces) ---
-                        'GForceLat': my_phys.mGForce[0], # G Latéral (Virage)
-                        'GForceLon': my_phys.mGForce[2], # G Longitudinal (Accélération/Freinage)
+                        'GForceLat': my_phys.mGForce[0],
+                        'GForceLon': my_phys.mGForce[2],
 
-                        # --- LES 4 ROUES (FL=0, FR=1, RL=2, RR=3) ---
-                        'TirePressFL': my_phys.mTirePressure[0],
-                        'TirePressFR': my_phys.mTirePressure[1],
-                        'TirePressRL': my_phys.mTirePressure[2],
-                        'TirePressRR': my_phys.mTirePressure[3],
+                        'TirePressFL': my_phys.mWheel[0].mPressure,
+                        'TirePressFR': my_phys.mWheel[1].mPressure,
+                        'TirePressRL': my_phys.mWheel[2].mPressure,
+                        'TirePressRR': my_phys.mWheel[3].mPressure,
                         
-                        'BrakeTempFL': my_phys.mBrakeTemp[0],
-                        'BrakeTempFR': my_phys.mBrakeTemp[1],
-                        'BrakeTempRL': my_phys.mBrakeTemp[2],
-                        'BrakeTempRR': my_phys.mBrakeTemp[3],
+                        'BrakeTempFL': my_phys.mWheel[0].mBrakeTemp,
+                        'BrakeTempFR': my_phys.mWheel[1].mBrakeTemp,
+                        'BrakeTempRL': my_phys.mWheel[2].mBrakeTemp,
+                        'BrakeTempRR': my_phys.mWheel[3].mBrakeTemp,
 
-                        'TireTempFL': my_phys.mTireTemp[0][0], # Ajouté pour alerte Pneus froids
-                        'TireTempFR': my_phys.mTireTemp[0][1], 
+                        'TireTempFL': my_phys.mWheel[0].mTemperature[1], 
+                        'TireTempFR': my_phys.mWheel[1].mTemperature[1], 
+                        'TireTempRL': my_phys.mWheel[2].mTemperature[1], 
+                        'TireTempRR': my_phys.mWheel[3].mTemperature[1], 
                         
-                        'TireWearFL': my_phys.mTireWear[0] * 100.0,
-                        'TireWearFR': my_phys.mTireWear[1] * 100.0,
-                        'TireWearRL': my_phys.mTireWear[2] * 100.0,
-                        'TireWearRR': my_phys.mTireWear[3] * 100.0,
+                        'TireWearFL': my_phys.mWheel[0].mWear * 100.0,
+                        'TireWearFR': my_phys.mWheel[1].mWear * 100.0,
+                        'TireWearRL': my_phys.mWheel[2].mWear * 100.0,
+                        'TireWearRR': my_phys.mWheel[3].mWear * 100.0,
                         
-                        'WheelRotFL': my_phys.mWheelRotation[0], # Pour détection Lock-up (Flat spot)
-                        'LocalVelX': my_phys.mLocalVel[0],
+                        'WheelRotFL': my_phys.mWheel[0].mRotation,
+                        'LocalVelX': my_phys.mLocalVel.x,
                         
                         'CompetitorsCount': len(competitors),
                         'CompetitorsLive': competitors
                     }
-                    
                     self.latest_data = live_data
                 
-            except Exception:
+            except Exception as e:
                 pass
                 
             time.sleep(1 / 60.0)
