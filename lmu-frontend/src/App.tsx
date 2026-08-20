@@ -9,7 +9,9 @@ import {
   Filter, Wifi, WifiOff, LayoutGrid, Flag, PlayCircle, Gauge, Droplet,
   Plus, X, Copy, FileText, UploadCloud, Layers, Tag, SlidersHorizontal, ChevronDown, 
   Star, ArrowRight, Settings2, RotateCcw, ArrowUp, ArrowDown,
-  MessageSquare, Edit3, Save, CornerUpLeft, MessageCircle
+  MessageSquare, Edit3, Save, CornerUpLeft, MessageCircle, 
+  Flame, Wind, Navigation, Pause, StepForward, ChevronLeft, ArrowUpRight,
+  Globe, Minus
 } from 'lucide-react';
 
 import { 
@@ -256,215 +258,702 @@ const DataView = ({ laps, historicalData, liveData }: any) => {
   );
 };
 
-// --- COMPOSANT VUE DRIVING (100% Vraie Data Python + LIVE TELEMETRY + G-METER) ---
+// --- COMPOSANT VUE DRIVING (Vraie Track Map GPS 2D + HUD MyLMU Symétrique Parfait + Traces Pro) ---
 const DrivingView = ({ laps, historicalData, liveData }: any) => {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
-  const [showInsights, setShowInsights] = useState(true);
+  const [showInsights, setShowInsights] = useState(false);
+  const [showTraces, setShowTraces] = useState(false); // Le Toggle Magique !
+  const [xAxisMode, setXAxisMode] = useState<'Dist' | 'Time'>('Dist');
+  const [currentSegment, setCurrentSegment] = useState(1);
+  const [zoomLevel, setZoomLevel] = useState(1);
+  const [followCar, setFollowCar] = useState(true);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
 
+  // 1. FORMATAGE COMPLET DES DONNÉES (Ajout des Secteurs et Temps au Tour)
   const data = historicalData && historicalData.length > 0 
     ? historicalData.map((d: any, i: number) => ({
         index: i,
         speedMy: d.TopSpeed || 0,
-        speedRef: (d.TopSpeed || 0) * 1.02, 
+        speedRef: d.TopSpeed_ref || 0, 
         throttleMy: d.Throttle || 0,
-        throttleRef: d.Throttle ? Math.max(0, d.Throttle - 5) : 0,
+        throttleRef: d.Throttle_ref || 0,
         brakeMy: d.Brake || 0,
-        brakeRef: d.Brake ? Math.max(0, d.Brake - 5) : 0,
-        gearMy: d.Gear || Math.max(1, Math.floor((d.TopSpeed || 0) / 40)),
-        gearRef: d.Gear || Math.max(1, Math.floor(((d.TopSpeed || 0) * 1.02) / 40)),
+        brakeRef: d.Brake_ref || 0,
+        gearMy: d.Gear || 1,
+        gearRef: d.Gear_ref || 1,
+        rpmMy: d.EngineRPM || 0,
+        rpmRef: d.EngineRPM_ref || 0,
+        steeringMy: d.SteeringAngle || 0,
+        steeringRef: d.SteeringAngle_ref || 0,
+        fuelMy: d.FuelConsumed || 0,
+        fuelRef: d.FuelConsumed_ref || 0,
+        veMy: d.VirtualEnergy || 0,
+        veRef: d.VirtualEnergy_ref || 0,
+        airMy: d.AmbientTemp || 0,
+        airRef: d.AmbientTemp_ref || 0,
+        trackMy: d.TrackTemp || 0,
+        trackRef: d.TrackTemp_ref || 0,
+        windMy: d.WindSpeed || 0,
+        windRef: d.WindSpeed_ref || 0,
+        windHeadingMy: d.WindHeading || 0,
+        windHeadingRef: d.WindHeading_ref || 0,
+        delta: d.delta || 0,
+        GPS_Lat: d.GPS_Lat || 0,
+        GPS_Lon: d.GPS_Lon || 0,
+        // --- NOUVEAU : SECTEURS ET LAP TIME ---
+        s1My: d.Sector1 || 0,
+        s1Ref: d.Sector1_ref || 0,
+        s2My: d.Sector2 || 0,
+        s2Ref: d.Sector2_ref || 0,
+        s3My: d.Sector3 || 0,
+        s3Ref: d.Sector3_ref || 0,
+        lapTimeMy: d.LapTime || 0,
+        lapTimeRef: d.LapTime_ref || 0,
+        distMy: d.LapDist || 0
       }))
-    : [{ speedMy: 0, speedRef: 0, throttleMy: 0, throttleRef: 0, brakeMy: 0, brakeRef: 0, gearMy: 1, gearRef: 1 }];
+    : [];
 
-  let dotX = -10, dotY = -10;
-  if (hoverIndex !== null && data.length > 1) {
-    const t = hoverIndex / (data.length - 1);
-    const invT = 1 - t;
-    dotX = invT * invT * 50 + 2 * invT * t * 400 + t * t * 900;
-    dotY = invT * invT * 250 + 2 * invT * t * 50 + t * t * 350;
+  // 2. CALCUL DU CADRAGE SVG
+  const viewBox = data.length > 0 ? calculateViewBox(data, 300) : "0 0 1000 400";
+
+  // 3. POSITIONNEMENT DE LA VOITURE
+  let dotX = -10000, dotY = -10000;
+  if (hoverIndex !== null && data[hoverIndex]) {
+    dotX = data[hoverIndex].GPS_Lon * 100000;
+    dotY = -data[hoverIndex].GPS_Lat * 100000;
+  } else if (data.length > 0) {
+    dotX = data[0].GPS_Lon * 100000;
+    dotY = -data[0].GPS_Lat * 100000;
   }
 
-  const activeData = (hoverIndex !== null && data[hoverIndex]) ? data[hoverIndex] : data[0];
+  const activeData = (hoverIndex !== null && data[hoverIndex]) ? data[hoverIndex] : (data[0] || {});
 
-  const gradientStops = data.length > 200 
-    ? data.filter((_: any, i: number) => i % Math.ceil(data.length / 100) === 0) 
-    : data;
+  // VRAIES VARIABLES D'AFFICHAGE (Live en priorité, sinon Historique)
+  const myThrottle = liveData?.Throttle !== undefined ? liveData.Throttle : (activeData.throttleMy || 0);
+  const myBrake = liveData?.Brake !== undefined ? liveData.Brake : (activeData.brakeMy || 0);
+  const mySpeed = liveData?.Speed !== undefined ? liveData.Speed : (activeData.speedMy || 0);
+  const myGear = liveData?.Gear !== undefined ? liveData.Gear : (activeData.gearMy || 1);
+  const myRPM = liveData?.EngineRPM !== undefined ? liveData.EngineRPM : (activeData.rpmMy || 0);
+  const mySteering = liveData?.Steering !== undefined ? liveData.Steering : (activeData.steeringMy || 0);
+  
+  const myFuel = liveData?.FuelLevel !== undefined ? liveData.FuelLevel.toFixed(1) : (activeData.fuelMy || 0).toFixed(1);
+  const myVE = liveData?.VirtualEnergy !== undefined ? liveData.VirtualEnergy.toFixed(1) : (activeData.veMy || 0).toFixed(1);
+  const myAir = liveData?.AmbientTemp !== undefined ? liveData.AmbientTemp.toFixed(1) : (activeData.airMy || 0).toFixed(1);
+  const myTrack = liveData?.TrackTemp !== undefined ? liveData.TrackTemp.toFixed(1) : (activeData.trackMy || 0).toFixed(1);
+  const myWind = liveData?.WindSpeed !== undefined ? liveData.WindSpeed.toFixed(1) : (activeData.windMy || 0).toFixed(1);
+  const myWindHeading = liveData?.WindHeading !== undefined ? liveData.WindHeading : (activeData.windHeadingMy || 0);
 
-  // Variables sécurisées (Priorité au Temps Réel)
-  const displayThrottle = liveData?.Throttle !== undefined ? liveData.Throttle : activeData.throttleMy;
-  const displayBrake = liveData?.Brake !== undefined ? liveData.Brake : activeData.brakeMy;
-  const displaySpeed = liveData?.Speed !== undefined ? liveData.Speed : activeData.speedMy;
-  const displayGear = liveData?.Gear !== undefined ? liveData.Gear : activeData.gearMy;
-  const displayFuel = liveData?.FuelLevel !== undefined ? liveData.FuelLevel.toFixed(2) : '--';
+  // RÉFÉRENCES (Alien Lap)
+  const refThrottle = activeData.throttleRef || 0;
+  const refBrake = activeData.brakeRef || 0;
+  const refSpeed = activeData.speedRef || 0;
+  const refGear = activeData.gearRef || 1;
+  const refRPM = activeData.rpmRef || 0;
+  const refSteering = activeData.steeringRef || 0;
+  
+  const refFuel = activeData.fuelRef ? activeData.fuelRef.toFixed(1) : '0.0';
+  const refVE = activeData.veRef ? activeData.veRef.toFixed(1) : '0.0';
+  const refAir = activeData.airRef ? activeData.airRef.toFixed(1) : '0.0';
+  const refTrack = activeData.trackRef ? activeData.trackRef.toFixed(1) : '0.0';
+  const refWind = activeData.windRef ? activeData.windRef.toFixed(1) : '0.0';
+  const refWindHeading = activeData.windHeadingRef || 0;
 
-  // Calcul du G-Meter (Cercle de Friction)
-  const gLat = liveData?.GForceLat !== undefined ? liveData.GForceLat / 9.81 : 0;
-  const gLon = liveData?.GForceLon !== undefined ? liveData.GForceLon / 9.81 : 0;
-  const gX = Math.max(-3, Math.min(3, gLat));
-  const gY = Math.max(-3, Math.min(3, gLon)); // Négatif au freinage = le point ira vers le haut visuellement avec le -gY CSS
+  const delta = activeData.delta ? activeData.delta.toFixed(3) : "0.000";
+  const deltaDist = activeData.delta ? Math.round(activeData.delta * (mySpeed / 3.6)) : 0; 
+
+  const trackGeom = React.useMemo(() => {
+    if (!data || data.length < 2) return null;
+    
+    const avgLat = data[0].GPS_Lat * (Math.PI / 180);
+    const lonScale = Math.cos(avgLat) || 1; // Compensation de la courbure terrestre
+    const mToSvg = 100000 / 111320; // Conversion Mètres physiques -> Unités SVG
+    
+    const centers = [];
+    const refs = [];
+    let totalEdge = 0;
+
+    for (let i = 0; i < data.length; i++) {
+      const pt = data[i];
+      // 1. Sauvegarde du parcours de la voiture de référence (Fantôme)
+      if (pt.GPS_Lon_ref && pt.GPS_Lat_ref) {
+        refs.push(`${pt.GPS_Lon_ref * 100000},${-pt.GPS_Lat_ref * 100000}`);
+      }
+      
+      // 2. Mathématiques du vecteur normal (Perpendiculaire à la piste)
+      const prev = i === 0 ? pt : data[i - 1];
+      const next = i === data.length - 1 ? pt : data[i + 1];
+      
+      let dx = next.GPS_Lon - prev.GPS_Lon;
+      let dy = -next.GPS_Lat - (-prev.GPS_Lat);
+      let len = Math.sqrt(dx*dx + dy*dy);
+      if (len === 0) { dx = 1; dy = 0; len = 1; }
+      
+      const nx = -dy / len;
+      const ny = dx / len;
+
+      const cx = pt.GPS_Lon * 100000;
+      const cy = -pt.GPS_Lat * 100000;
+
+      // 3. Décalage de la trajectoire pour trouver le CENTRE absolu de la piste
+      const centerX = cx + (nx * (pt.PathLateral || 0) * mToSvg) / lonScale;
+      const centerY = cy + (ny * (pt.PathLateral || 0) * mToSvg);
+      
+      centers.push(`${centerX},${centerY}`);
+      totalEdge += (pt.TrackEdge || 6); // Largeur de la piste jusqu'à l'herbe
+    }
+
+    return {
+      surfacePath: "M " + centers.join(" L "),
+      refPath: refs.length > 0 ? "M " + refs.join(" L ") : "",
+      width: (totalEdge / data.length) * 2 * mToSvg // Largeur totale SVG
+    };
+  }, [data]);
+
+  // --- NOUVEAU : CALCUL DES 8 SEGMENTS DYNAMIQUES ---
+  const trackSegments = React.useMemo(() => {
+    if (!data || data.length < 8 || !trackGeom) return [];
+    const segmentSize = Math.floor(data.length / 8);
+    const segments = [];
+    let bestDelta = Infinity;
+    let bestIndex = -1;
+
+    for (let i = 0; i < 8; i++) {
+      const startIndex = i * segmentSize;
+      const endIndex = i === 7 ? data.length - 1 : (i + 1) * segmentSize - 1;
+      
+      // Calcul du temps perdu/gagné uniquement dans CE segment
+      const startDelta = data[startIndex]?.delta || 0;
+      const endDelta = data[endIndex]?.delta || 0;
+      const segmentDelta = endDelta - startDelta;
+      
+      if (segmentDelta < bestDelta) {
+        bestDelta = segmentDelta;
+        bestIndex = i;
+      }
+
+      segments.push({
+        id: i + 1,
+        startIndex,
+        endIndex,
+        delta: segmentDelta,
+        color: segmentDelta > 0 ? '#ef4444' : '#10b981' // Rouge si perte, Vert si gain
+      });
+    }
+    
+    // Le meilleur de tous les segments devient Violet
+    if (bestIndex !== -1) segments[bestIndex].color = '#a855f7';
+
+    return segments;
+  }, [data, trackGeom]);
+
+  // Si on clique sur un segment, on place la tête de lecture au début de ce segment !
+  useEffect(() => {
+    if (trackSegments.length > 0 && trackSegments[currentSegment - 1]) {
+      setHoverIndex(trackSegments[currentSegment - 1].startIndex);
+    }
+  }, [currentSegment, trackSegments]);
+  
+  // --- NOUVEAU : FONCTIONS DE CALCUL POUR LE SECTOR COMPARISON ---
+  const formatTime = (t: number) => t > 0 ? (t >= 60 ? `${Math.floor(t/60)}:${(t%60).toFixed(3).padStart(6,'0')}` : t.toFixed(3)) : '--.---';
+  
+  const s1Gap = (activeData.s1My || 0) - (activeData.s1Ref || 0);
+  const s2Gap = (activeData.s2My || 0) - (activeData.s2Ref || 0);
+  const s3Gap = (activeData.s3My || 0) - (activeData.s3Ref || 0);
+  const lapGap = (activeData.lapTimeMy || 0) - (activeData.lapTimeRef || 0);
+
+  const SectorRow = ({ label, myTime, gap, refTime, isBad }: any) => (
+    <div className="grid grid-cols-4 gap-2 text-center items-center py-2 font-mono text-[12px] font-bold border-b border-gray-800/40 last:border-0">
+      <div className="text-gray-400 text-left font-sans">{label}</div>
+      <div className="text-gray-200">{formatTime(myTime)}</div>
+      <div className={isBad ? "text-[#ef4444]" : "text-[#10b981]"}>{gap > 0 ? `+${gap.toFixed(3)}` : gap < 0 ? gap.toFixed(3) : '--.---'}</div>
+      <div className="text-[#3b82f6]">{formatTime(refTime)}</div>
+    </div>
+  );
+
+  // === HELPER POUR LES GRAPHIQUES TRACES (Style MoTeC/MyLMU avec Transparence) ===
+  const TraceChart = ({ dataKeyMy, dataKeyRef, colorMy, colorRef, label, domain, isStep=false, isArea=false, activeMy, activeRef }: any) => (
+    <div className="flex w-full h-[85px] border-b border-gray-800/60 pb-1">
+      <div className="w-28 flex flex-col justify-between py-1 pr-2 shrink-0">
+        <span className="text-[10px] font-black tracking-widest text-gray-400">{label}</span>
+        <div className="flex flex-col">
+          <span className="text-xs font-bold" style={{ color: colorMy }}>
+             {label === 'DELTA' && activeMy > 0 ? '+' : ''}{label === 'DELTA' ? Number(activeMy).toFixed(3) : Math.round(activeMy)}{label === 'DELTA' ? 's' : ''}
+          </span>
+          <span className="text-xs font-bold opacity-60" style={{ color: colorRef }}>
+             {label === 'DELTA' ? '' : Math.round(activeRef)}
+          </span>
+        </div>
+      </div>
+      <div className="flex-1 relative">
+        <ResponsiveContainer width="100%" height="100%">
+          {isArea ? (
+            <AreaChart data={data} syncId="telemetry" margin={{top:5, bottom:5, left:0, right:0}}>
+              <YAxis hide domain={domain} />
+              <Tooltip content={<></>} cursor={{ stroke: '#ffffff', strokeWidth: 1.5, opacity: 0.5 }} isAnimationActive={false} />
+              <Area type="stepBefore" dataKey={dataKeyMy} stroke={colorMy} fill={colorMy} fillOpacity={0.15} strokeWidth={1.5} isAnimationActive={false} />
+              <Area type="stepBefore" dataKey={dataKeyRef} stroke={colorRef} fill="none" strokeWidth={1} strokeDasharray="3 3" isAnimationActive={false} />
+            </AreaChart>
+          ) : (
+            <RechartsLine data={data} syncId="telemetry" margin={{top:5, bottom:5, left:0, right:0}}>
+              <YAxis hide domain={domain} />
+              <Tooltip content={<></>} cursor={{ stroke: '#ffffff', strokeWidth: 1.5, opacity: 0.5 }} isAnimationActive={false} />
+              {isStep ? (
+                <>
+                  <Line type="stepBefore" dataKey={dataKeyMy} stroke={colorMy} strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                  <Line type="stepBefore" dataKey={dataKeyRef} stroke={colorRef} strokeWidth={1} strokeDasharray="3 3" dot={false} isAnimationActive={false} />
+                </>
+              ) : (
+                <>
+                  <Line type="monotone" dataKey={dataKeyMy} stroke={colorMy} strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                  <Line type="monotone" dataKey={dataKeyRef} stroke={colorRef} strokeWidth={1} strokeDasharray="3 3" dot={false} isAnimationActive={false} />
+                </>
+              )}
+            </RechartsLine>
+          )}
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
 
   return (
-    <div className="flex-1 relative bg-[#1c1e2b] rounded-xl border border-gray-800 overflow-hidden shadow-2xl flex flex-row">
+    <div className="flex-1 relative bg-[#090a0f] rounded-xl border border-gray-800 overflow-hidden shadow-2xl flex flex-col">
       
-      {/* BANDEAU IA INSIGHTS DÉPLIABLE */}
-      <div className={`absolute left-0 top-0 h-full bg-[#11111a] border-r-2 border-[#5b21b6] shadow-[10px_0_30px_rgba(0,0,0,0.5)] z-20 transition-all duration-300 ease-in-out flex flex-col overflow-hidden ${showInsights ? 'w-80' : 'w-0'}`}>
-        <div className={`w-80 p-5 flex flex-col h-full transition-opacity duration-300 ${showInsights ? 'opacity-100' : 'opacity-0'}`}>
-          <p className="text-white text-[13px] font-bold leading-relaxed mb-4 pr-2">
-            Looks like you are losing the most time in SQ8. Here is how you can improve:
-          </p>
-          <button className="w-full bg-[#5b21b6] hover:bg-[#6d28d9] transition-colors text-white font-bold py-2.5 rounded shadow-[0_0_15px_rgba(91,33,182,0.4)] flex items-center justify-center gap-2 mb-6 uppercase tracking-wider text-[13px]">
-            <Activity size={16} /> SHOW ME
-          </button>
-          <div className="flex-1 flex flex-col gap-4 overflow-y-auto pr-2 pb-4 scrollbar-hide">
-            <div className="bg-[#11111a] border border-[#4c1d95] rounded-lg p-4 flex gap-3 shadow-lg">
-              <div className="mt-1 flex-shrink-0"><div className="w-7 h-7 rounded-full bg-[#2e1065] flex items-center justify-center"><Activity size={12} className="text-[#a855f7]" /></div></div>
-              <p className="text-[#94a3b8] text-xs leading-relaxed">You were on the brakes <strong className="text-white">2.3s more</strong>, you might be over-slowing or inefficient in your application.</p>
-            </div>
-            <div className="bg-[#11111a] border border-[#4c1d95] rounded-lg p-4 flex gap-3 shadow-lg">
-              <div className="mt-1 flex-shrink-0"><div className="w-7 h-7 rounded-full bg-[#2e1065] flex items-center justify-center"><Activity size={12} className="text-[#a855f7]" /></div></div>
-              <p className="text-[#94a3b8] text-xs leading-relaxed">You were on the throttle <strong className="text-white">1.9s less</strong> overall. You may be hesitating on the power delivery.</p>
-            </div>
-          </div>
+      {/* NOUVEAU : TOP NAVIGATION BAR (MyLMU Style) */}
+      <div className="h-12 bg-[#121318] border-b border-gray-800/60 flex items-center justify-between px-4 shrink-0 relative z-40">
+        <div className="flex items-center gap-6 h-full">
+          <button className="h-full flex items-center gap-2 text-gray-500 hover:text-gray-300 font-bold text-[11px] uppercase tracking-widest transition-colors"><LayoutGrid size={14}/> Overview</button>
+          <button className="h-full flex items-center gap-2 text-white font-bold text-[11px] uppercase tracking-widest border-b-2 border-[#3a86ff]"><Route size={14}/> Track Map</button>
+          <button className="h-full flex items-center gap-2 text-gray-500 hover:text-gray-300 font-bold text-[11px] uppercase tracking-widest transition-colors"><Activity size={14}/> Pit Wall</button>
+          <button className="h-full flex items-center gap-2 text-gray-500 hover:text-gray-300 font-bold text-[11px] uppercase tracking-widest transition-colors"><Wrench size={14}/> Setup</button>
         </div>
-      </div>
-
-      <button onClick={() => setShowInsights(!showInsights)} className={`absolute top-6 z-30 bg-[#11111a] border-y-2 border-r-2 border-[#5b21b6] border-l-0 text-white py-4 px-1 rounded-r-lg shadow-[5px_0_15px_rgba(0,0,0,0.5)] hover:bg-[#1a1a24] transition-all duration-300 flex items-center justify-center ${showInsights ? 'left-80' : 'left-0'}`}>
-        <span className="text-[10px] font-black tracking-[0.2em] uppercase text-white" style={{ writingMode: 'vertical-rl', textOrientation: 'mixed', transform: 'rotate(180deg)' }}>Insights</span>
-      </button>
-
-      {/* MAP BACKGROUND GÉANTE */}
-      <div className={`absolute inset-0 h-full transition-all duration-300 pointer-events-none ${showInsights ? 'ml-80 w-[calc(100%-20rem)]' : 'w-full'}`}>
-        <svg viewBox="0 0 1000 400" className="w-full h-full object-cover opacity-90">
-          <defs>
-            <linearGradient id="trackGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-              {gradientStops.map((d: any, i: number) => {
-                let color = "#3a86ff"; 
-                if (d.brakeMy > 0) color = "#e76f51"; 
-                else if (d.throttleMy > 0) color = "#2a9d5c"; 
-                return <stop key={i} offset={`${(i / gradientStops.length) * 100}%`} stopColor={color} />;
-              })}
-            </linearGradient>
-          </defs>
-          <path d="M 50,240 Q 400,40 900,340" fill="none" stroke="#e9c46a" strokeWidth="2" strokeDasharray="6 4" />
-          <path d="M 50,250 Q 400,50 900,350" fill="none" stroke="url(#trackGradient)" strokeWidth="4" />
-          {hoverIndex !== null && data.length > 1 && (
-            <circle cx={dotX} cy={dotY} r="6" fill="#ffffff" className="drop-shadow-[0_0_8px_#ffffff]" />
-          )}
-        </svg>
-      </div>
-
-      {/* PANNEAU STINTS DROITE */}
-      <div className="absolute top-6 right-6 w-80 bg-[#212332]/95 backdrop-blur-md border border-gray-800 rounded-lg flex flex-col shadow-2xl z-10 h-[50vh]">
-        <div className="flex bg-[#181924] rounded-t-lg overflow-hidden">
-          <button className="flex-1 bg-[#3a86ff] text-white text-xs font-bold py-3 shadow-md">STINTS</button>
-          <button className="flex-1 text-[#a0a3b5] text-xs font-bold py-3 hover:bg-gray-800 transition-colors">SPLITS</button>
-        </div>
-        <div className="p-3 bg-[#1c1e2b]/80 border-y border-gray-800 flex justify-between items-center text-xs font-bold">
-          <span className="text-white tracking-widest">STINT 1</span>
-          <span className="text-[#8338ec] flex items-center gap-1"><RefreshCw size={12}/> {liveData?.MyLastLap ? liveData.MyLastLap.toFixed(3) : '--:--.---'}</span>
-        </div>
-        <div className="flex-1 overflow-y-auto p-2 space-y-1">
-          {laps.map((l: any, idx: number) => (
-            <div key={idx} className={`flex items-center px-4 py-2.5 rounded-md cursor-pointer transition-colors ${l.active ? 'bg-[#3a86ff]/20 border border-[#3a86ff]/50 text-white' : 'hover:bg-gray-800 text-[#a0a3b5]'}`}>
-              <span className="w-8 text-[11px] font-bold">{l.lap}</span>
-              <span className="flex-1 font-mono text-xs font-bold">{l.time}</span>
-              <span className="text-[10px] font-bold">{l.diff}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="flex-1"></div> 
-
-      {/* HUD INFÉRIEUR : Branché sur les variables display (Temps Réel) */}
-      <div className={`relative z-10 bg-[#181924]/95 backdrop-blur-xl border-t border-gray-800 flex flex-col p-4 gap-2 transition-all duration-300 ${showInsights ? 'ml-80' : 'ml-0'}`}>
         
-        <div className="flex justify-between items-center px-2">
-          <div className="flex items-center gap-4">
-            <div className="bg-[#1c2438] text-[#3a86ff] px-3 py-1.5 rounded flex items-center gap-3 font-mono font-bold text-xs border border-[#3a86ff]/20">
-              0:00.000 <span className="w-px h-3 bg-gray-700"></span>
-              <span className="flex items-center gap-1.5 text-[10px] text-[#a0a3b5]">
-                <Fuel size={10} className="text-[#3a86ff]"/> {displayFuel} L
-              </span>
+        {/* Distance Dynamique au centre */}
+        <div className="absolute left-1/2 transform -translate-x-1/2 flex items-center gap-2 bg-[#1a1b26] px-4 py-1.5 rounded-lg border border-gray-800 shadow-inner">
+          <MapPin size={14} className="text-gray-400" />
+          <span className="text-white font-mono font-bold text-xs">{Math.round(activeData.distMy || 0)} M</span>
+        </div>
+        <div></div>
+      </div>
+
+      <div className="flex-1 relative flex flex-row overflow-hidden bg-[#090a0f]">
+        
+        {/* NOUVEAU : TOOLBAR VERTICALE GAUCHE (100% Connectée) */}
+        <div className="absolute left-4 top-1/2 transform -translate-y-1/2 w-[42px] bg-[#121318]/90 backdrop-blur-md border border-gray-800/60 rounded-2xl flex flex-col items-center py-4 gap-5 z-30 shadow-lg">
+          <button className="text-gray-500 hover:text-white transition-colors"><Settings size={18}/></button>
+          <button className="text-white font-black text-[11px] tracking-widest">2D</button>
+          <div className="w-5 h-[1px] bg-gray-800"></div>
+          <button onClick={() => setZoomLevel(prev => Math.min(prev + 0.5, 5))} className="text-gray-400 hover:text-white transition-colors"><Plus size={20}/></button>
+          <button onClick={() => setZoomLevel(prev => Math.max(prev - 0.5, 0.5))} className="text-gray-400 hover:text-white transition-colors"><Minus size={20}/></button>
+          <button onClick={() => { setZoomLevel(1); setFollowCar(true); }} className="text-gray-400 hover:text-white transition-colors"><RotateCcw size={16}/></button>
+          <div className="w-5 h-[1px] bg-gray-800"></div>
+          <div onClick={() => setFollowCar(!followCar)} className="flex flex-col items-center gap-1 cursor-pointer group">
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center transition-colors border shadow-inner ${followCar ? 'bg-[#3b82f6]/20 border-[#3b82f6]/50 text-[#3b82f6]' : 'bg-gray-800/80 border-gray-700 text-white group-hover:bg-gray-700'}`}>
+              <CarFront size={16} />
             </div>
-            <span className="text-[#3a86ff] font-bold text-xs tracking-wide">MY LAP</span>
+            <span className="text-[9px] font-mono text-gray-500 font-bold">{zoomLevel.toFixed(1)}x</span>
           </div>
-          <div className="text-[#2a2c3d] font-mono font-black text-lg tracking-widest">-0.000S</div>
-          <div className="flex items-center gap-4">
-            <span className="text-[#e9c46a] font-bold text-xs tracking-wide">REFERENCE</span>
-            <div className="w-6 h-6 rounded-full bg-gradient-to-br from-orange-500 to-red-800 flex items-center justify-center border border-orange-900/50"><div className="w-4 h-4 rounded-full bg-black/40"></div></div>
-            <div className="bg-[#332a18] text-[#e9c46a] px-3 py-1.5 rounded flex items-center gap-3 font-mono font-bold text-xs border border-[#e9c46a]/20">
-              0:00.000 <span className="w-px h-3 bg-gray-700"></span>
-              <span className="flex items-center gap-1.5 text-[10px] text-[#a0a3b5]"><Fuel size={10} className="text-[#e9c46a]"/> -- L</span>
-            </div>
-          </div>
+          <button className="text-gray-500 hover:text-white transition-colors mt-1"><Globe size={18}/></button>
         </div>
 
-        {/* BARRES DE TÉLÉMÉTRIE LIVE & G-METER CENTRAL */}
-        <div className="flex items-center justify-between bg-[#212332] p-2 rounded-lg border border-gray-800">
-          <div className="flex items-center gap-3 w-[45%]">
-            <div className="w-6 h-6 rounded-full border-2 border-[#3a86ff] flex items-center justify-center text-[#3a86ff]">🛞</div>
-            <div className="flex-1 h-3 bg-gray-900 rounded overflow-hidden flex"><div style={{width: `${displayThrottle}%`}} className="bg-[#2a9d5c] h-full transition-all duration-75"></div></div>
-            <span className="w-8 text-[10px] font-bold text-[#2a9d5c] text-right">{Math.round(displayThrottle)}%</span>
-            <div className="w-16 h-3 bg-gray-900 rounded overflow-hidden flex"><div style={{width: `${displayBrake}%`}} className="bg-[#e76f51] h-full transition-all duration-75"></div></div>
-            <span className="w-6 text-[10px] font-bold text-[#e76f51] text-right">{Math.round(displayBrake)}%</span>
-            <span className="text-[11px] font-bold text-white ml-2 flex gap-2 w-28">⚙️ {displayGear} <span className="text-[#3a86ff] ml-2">🚀 {Math.round(displaySpeed)} KMH</span></span>
+        {/* CARTE GPS TOUJOURS EN PLEIN ÉCRAN (Z-0) */}
+        <div className="absolute inset-0 flex items-center justify-center z-0 overflow-hidden">
+          {data.length > 0 ? (
+            <svg viewBox={viewBox} className="w-[90%] h-[90%] object-contain opacity-90 drop-shadow-2xl overflow-visible transition-transform duration-200" style={{ transform: `scale(${zoomLevel || 1})` }}>
+              
+              {/* 1. BORDURES BLANCHES (Lignes de limites de piste) */}
+              {trackGeom && <path d={trackGeom.surfacePath} fill="none" stroke="#ffffff" strokeWidth={(trackGeom.width || 0) + 6} strokeLinecap="round" strokeLinejoin="round" opacity="0.6" />}
+              
+              {/* 2. ASPHALTE GRIS (La surface roulable) */}
+              {trackGeom && <path d={trackGeom.surfacePath} fill="none" stroke="#121318" strokeWidth={trackGeom.width || 0} strokeLinecap="round" strokeLinejoin="round" />}
+              
+              {/* 3. LIGNE CENTRALE DE LA PISTE (Pointillés discrets) */}
+              {trackGeom && <path d={trackGeom.surfacePath} fill="none" stroke="#2a2c3d" strokeWidth="2" strokeDasharray="10 15" strokeLinecap="round" strokeLinejoin="round" />}
+              
+              {/* 4. TRAJECTOIRE DU FANTÔME (La ligne de référence, jaune pointillée) */}
+              {trackGeom && trackGeom.refPath && <path d={trackGeom.refPath} fill="none" stroke="#e9c46a" strokeWidth={showTraces ? "4" : "6"} strokeDasharray="15 10" opacity="0.5" />}
+
+              {/* 5. TA TRAJECTOIRE (Liée à tes pédales) */}
+              {data.map((pt: any, i: number) => {
+                if (i === 0) return null;
+                const prev = data[i - 1];
+                let color = "#3a86ff"; 
+                if (pt.brakeMy > 5) color = "#ef4444"; 
+                else if (pt.throttleMy > 50) color = "#10b981"; 
+                return (
+                  <line key={i} x1={prev.GPS_Lon * 100000} y1={-prev.GPS_Lat * 100000} x2={pt.GPS_Lon * 100000} y2={-pt.GPS_Lat * 100000} stroke={color} strokeWidth={showTraces ? "16" : "12"} strokeLinecap="round" />
+                );
+              })}
+              
+              {/* 6. LA VOITURE (Point lumineux) */}
+              {hoverIndex !== null && (
+                <circle cx={dotX} cy={dotY} r={showTraces ? "45" : "35"} fill="#ffffff" className="drop-shadow-[0_0_20px_rgba(255,255,255,0.8)] transition-all duration-75" />
+              )}
+            </svg>
+          ) : (
+            <div className="text-gray-500 font-bold text-sm bg-[#121318] p-6 rounded-xl border border-gray-800 z-10">
+              AWAITING TELEMETRY TO DRAW TRACK MAP
+            </div>
+          )}
+
+          {/* NOUVEAU : MINI TRACK MAP (Flottant en haut à droite sur la map principale) */}
+          {!showTraces && trackSegments.length > 0 && (
+            <div className="absolute top-4 right-6 w-[320px] bg-[#0d0e12]/95 backdrop-blur-md border border-[#2a2c3d]/60 rounded-xl shadow-[0_10px_40px_rgba(0,0,0,0.8)] z-30 flex flex-col overflow-hidden p-4">
+              <div className="h-[160px] w-full relative">
+                <svg viewBox={viewBox} className="w-full h-full object-contain overflow-visible">
+                  
+                  {/* Lignes épaisses des 8 Segments */}
+                  {trackSegments.map((seg: any) => {
+                    const segmentData = data.slice(seg.startIndex, seg.endIndex + 1);
+                    return (
+                      <path 
+                        key={`path-${seg.id}`}
+                        d={`M ${segmentData.map((d:any) => `${d.GPS_Lon * 100000},${-d.GPS_Lat * 100000}`).join(" L ")}`} 
+                        fill="none" stroke={seg.color} strokeWidth="12" strokeLinecap="round" strokeLinejoin="round" 
+                        className={`cursor-pointer transition-all duration-300 ${currentSegment === seg.id ? 'opacity-100' : 'opacity-30 hover:opacity-70'}`}
+                        onClick={() => setCurrentSegment(seg.id)}
+                      />
+                    );
+                  })}
+
+                  {/* Bulles cliquables numérotées */}
+                  {trackSegments.map((seg: any) => {
+                    // On place la bulle au milieu du segment
+                    const centerPt = data[Math.floor((seg.startIndex + seg.endIndex) / 2)];
+                    if (!centerPt) return null;
+                    return (
+                      <g key={`bubble-${seg.id}`} onClick={() => setCurrentSegment(seg.id)} className="cursor-pointer">
+                        <circle cx={centerPt.GPS_Lon * 100000} cy={-centerPt.GPS_Lat * 100000} r="22" fill={currentSegment === seg.id ? seg.color : "#121318"} stroke={seg.color} strokeWidth="5" className="transition-colors" />
+                        <text x={centerPt.GPS_Lon * 100000} y={-(centerPt.GPS_Lat * 100000) + 7} textAnchor="middle" fill={currentSegment === seg.id ? "#fff" : seg.color} fontSize="20" fontWeight="900" fontFamily="monospace">
+                          {seg.id}
+                        </text>
+                      </g>
+                    );
+                  })}
+                </svg>
+              </div>
+              
+              {/* Résumé du temps du segment sélectionné */}
+              <div className="flex justify-between items-center mt-3 pt-3 border-t border-gray-800/60">
+                <span className="text-gray-300 text-[11px] font-bold">Time loss / gain</span>
+                <span className={`font-mono text-sm font-black ${trackSegments[currentSegment-1]?.color === '#ef4444' ? 'text-[#ef4444]' : trackSegments[currentSegment-1]?.color === '#a855f7' ? 'text-[#a855f7]' : 'text-[#10b981]'}`}>
+                  {trackSegments[currentSegment-1]?.delta > 0 ? '+' : ''}{trackSegments[currentSegment-1]?.delta?.toFixed(3)}s
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* PANNEAU SECTOR COMPARISON (Flottant sur la carte) */}
+        <div className="absolute bottom-4 left-20 w-[260px] bg-[#0d0e12]/95 backdrop-blur-md border border-[#2a2c3d]/60 rounded-xl shadow-[0_10px_40px_rgba(0,0,0,0.8)] z-10 flex flex-col overflow-hidden">
+          <div className="flex justify-between items-center p-3 border-b border-gray-800/60 bg-[#121318]">
+            <span className="text-white font-bold text-sm tracking-wide">Sector Comparison</span>
+            <ArrowUpRight size={16} className="text-gray-500 hover:text-white cursor-pointer" />
           </div>
           
-          {/* CERCLE DE FRICTION (G-G DIAGRAM) */}
-          <div className="w-12 h-12 bg-[#181924] rounded-full border-2 border-[#2a2c3d] relative overflow-hidden flex items-center justify-center shadow-inner shrink-0">
-            {/* Réticule central */}
-            <div className="absolute w-full h-px bg-[#4a4d65]/30"></div>
-            <div className="absolute h-full w-px bg-[#4a4d65]/30"></div>
-            {/* Anneau de tolérance 2G */}
-            <div className="absolute w-2/3 h-2/3 rounded-full border border-[#4a4d65]/20"></div>
+          <div className="p-4 pb-2">
+            <div className="grid grid-cols-4 gap-2 text-center mb-3 items-center">
+              <div></div>
+              <div className="flex justify-center"><img src="/steering-wheel.png" className="w-6 opacity-70" alt="My Car" /></div>
+              <div className="text-[10px] font-black text-gray-500 tracking-widest">GAP</div>
+              <div className="flex justify-center">
+                <div className="w-6 h-6 bg-[#3b82f6] rounded flex items-center justify-center shadow-inner"></div>
+              </div>
+            </div>
             
-            {/* Le traceur G-Force (Violet brillant) */}
-            <div 
-              className="absolute w-2.5 h-2.5 bg-[#8338ec] rounded-full shadow-[0_0_10px_#8338ec] transition-all duration-75"
-              style={{
-                transform: `translate(${gX * 7}px, ${-gY * 7}px)` // -gY inverse l'axe vertical (le frein pousse le point vers le haut)
-              }}
-            ></div>
+            <SectorRow label="S1" myTime={activeData.s1My} gap={s1Gap} refTime={activeData.s1Ref} isBad={s1Gap > 0} />
+            <SectorRow label="S2" myTime={activeData.s2My} gap={s2Gap} refTime={activeData.s2Ref} isBad={s2Gap > 0} />
+            <SectorRow label="S3" myTime={activeData.s3My} gap={s3Gap} refTime={activeData.s3Ref} isBad={s3Gap > 0} />
+            <div className="mt-2 pt-2 border-t border-gray-800/60">
+              <SectorRow label="LAP" myTime={activeData.lapTimeMy} gap={lapGap} refTime={activeData.lapTimeRef} isBad={lapGap > 0} />
+            </div>
           </div>
-
-          <div className="flex items-center gap-3 w-[45%] justify-end">
-            <span className="text-[11px] font-bold text-white flex gap-2 w-28 justify-end"><span className="text-[#e9c46a] mr-2">🚀 {Math.round(activeData.speedRef)} KMH</span> ⚙️ {activeData.gearRef}</span>
-            <span className="w-6 text-[10px] font-bold text-[#e76f51] text-right">{Math.round(activeData.brakeRef)}%</span>
-            <div className="w-16 h-3 bg-gray-900 rounded overflow-hidden flex justify-end"><div style={{width: `${activeData.brakeRef}%`}} className="bg-[#e76f51] h-full transition-all duration-75"></div></div>
-            <span className="w-8 text-[10px] font-bold text-[#2a9d5c] text-right">{Math.round(activeData.throttleRef)}%</span>
-            <div className="flex-1 h-3 bg-gray-900 rounded overflow-hidden flex justify-end"><div style={{width: `${activeData.throttleRef}%`}} className="bg-[#2a9d5c] h-full transition-all duration-75"></div></div>
-            <div className="w-6 h-6 rounded-full border-2 border-[#e9c46a] flex items-center justify-center text-[#e9c46a]">🛞</div>
+          
+          <div className="bg-[#0a0a0f] p-3 flex flex-col items-center justify-center border-t border-gray-800/60">
+            <div className="flex items-center justify-between w-full px-2">
+              <button onClick={() => setCurrentSegment(Math.max(1, currentSegment - 1))} className="text-gray-500 hover:text-white transition-colors"><ChevronLeft size={18}/></button>
+              <span className="text-gray-200 font-bold text-[13px] tracking-wide">Segment {currentSegment} / 8</span>
+              <button onClick={() => setCurrentSegment(Math.min(8, currentSegment + 1))} className="text-gray-500 hover:text-white transition-colors"><ChevronRight size={18}/></button>
+            </div>
+            <span className="text-[9px] font-mono text-gray-500 mt-1.5 flex items-center gap-2">
+              {Math.round(data[trackSegments[currentSegment-1]?.startIndex]?.distMy || 0)}m - {Math.round(data[trackSegments[currentSegment-1]?.endIndex]?.distMy || 0)}m
+              {trackSegments.length > 0 && (
+                <span className={`font-bold px-1.5 rounded ${trackSegments[currentSegment-1]?.delta > 0 ? 'text-[#ef4444] bg-red-900/20' : trackSegments[currentSegment-1]?.color === '#a855f7' ? 'text-[#a855f7] bg-purple-900/20' : 'text-[#10b981] bg-green-900/20'}`}>
+                  {trackSegments[currentSegment-1]?.delta > 0 ? '+' : ''}{trackSegments[currentSegment-1]?.delta?.toFixed(3)}s
+                </span>
+              )}
+            </span>
           </div>
         </div>
 
-        {/* OVERVIEW GRAPH */}
-        <div className="h-14 w-full bg-[#1c1e2b] rounded relative border border-gray-800">
-          <span className="absolute top-1 left-2 text-[9px] font-bold text-[#3a86ff] z-10">OVERVIEW</span>
-          <ResponsiveContainer width="100%" height="100%">
-            <RechartsLine data={data} onMouseMove={(e: any) => { if(e?.activeTooltipIndex !== undefined) setHoverIndex(e.activeTooltipIndex); }} onMouseLeave={() => setHoverIndex(null)}>
-              <YAxis hide domain={['dataMin - 10', 'dataMax + 10']} />
-              <Tooltip content={<></>} cursor={{ stroke: '#3a86ff', strokeWidth: 1.5 }} isAnimationActive={false} />
-              <Line type="monotone" dataKey="speedMy" stroke="#3a86ff" strokeWidth={1.5} dot={false} isAnimationActive={false} />
-              <Line type="monotone" dataKey="speedRef" stroke="#e9c46a" strokeWidth={1} strokeDasharray="3 3" dot={false} isAnimationActive={false} />
-            </RechartsLine>
-          </ResponsiveContainer>
-        </div>
+        {/* PANNEAU DES TRACES (A droite, OVERLAY TRANSLUCIDE sur la map) */}
+        {showTraces && (
+          <div className="absolute right-0 top-0 h-full w-[55%] flex flex-col border-l border-[#5b21b6]/30 bg-[#0d0e12]/80 backdrop-blur-xl shadow-[-20px_0_40px_rgba(0,0,0,0.7)] z-20">
+            
+            {/* Header Traces Connecté */}
+            <div className="p-4 border-b border-gray-800/60 flex flex-col gap-3 shrink-0">
+              <div className="flex items-center gap-4 justify-between">
+                
+                <div className="bg-[#121318]/80 rounded-xl border border-gray-800/50 p-3 flex items-center justify-between flex-1">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full border border-gray-700 bg-gray-900 flex items-center justify-center shrink-0 overflow-hidden">
+                      <img src="/steering-wheel.png" alt="Steering" className="w-7 h-7 opacity-80 object-contain" />
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-white text-[13px] font-bold flex items-center gap-1.5"><CountryFlag code="FR"/> Mathéo Joly</span>
+                      <span className="text-gray-400 text-[10px] tracking-widest font-mono mt-0.5">Lap <span className="text-white text-xs">{formatTime(activeData.lapTimeMy || 0)}</span></span>
+                    </div>
+                  </div>
+                  <div className="flex gap-4 text-[11px] font-bold text-gray-200 font-mono text-right shrink-0">
+                    <span>{Math.round(activeData.speedMy || 0)} km/h</span>
+                    <span>⚙ {activeData.gearMy === 0 ? 'R' : activeData.gearMy || 1}</span>
+                    <span>RPM {Math.round(activeData.rpmMy || 0)}</span>
+                  </div>
+                </div>
 
-        <div className="flex items-center gap-1 mt-1">
-          <button className="bg-[#212332] p-1.5 rounded text-gray-500 hover:text-white transition"><Lock size={12} /></button>
-          <button className="bg-[#3a86ff] p-1.5 rounded text-white"><Route size={12} /></button>
-          <div className="flex-1 grid grid-cols-8 gap-1 mx-2">
-             <div className="bg-[#2a2c3d] text-[#a0a3b5] rounded px-3 py-1 text-[10px] font-bold text-center border border-gray-600">SQ1 0.00s</div>
-             <div className="bg-[#2a2c3d] text-[#a0a3b5] rounded px-3 py-1 text-[10px] font-bold text-center border border-gray-600">SQ2 0.00s</div>
-             <div className="bg-[#2a2c3d] text-[#a0a3b5] rounded px-3 py-1 text-[10px] font-bold text-center border border-gray-600">SQ3 0.00s</div>
-             <div className="bg-[#2a2c3d] text-[#a0a3b5] rounded px-3 py-1 text-[10px] font-bold text-center border border-gray-600">SQ4 0.00s</div>
-             <div className="bg-[#2a2c3d] text-[#a0a3b5] rounded px-3 py-1 text-[10px] font-bold text-center border border-gray-600">SQ5 0.00s</div>
-             <div className="bg-[#2a2c3d] text-[#a0a3b5] rounded px-3 py-1 text-[10px] font-bold text-center border border-gray-600">SQ6 0.00s</div>
-             <div className="bg-[#2a2c3d] text-[#a0a3b5] rounded px-3 py-1 text-[10px] font-bold text-center border border-gray-600">SQ7 0.00s</div>
-             <div className="bg-[#2a2c3d] text-[#a0a3b5] rounded px-3 py-1 text-[10px] font-bold text-center border border-gray-600">SQ8 0.00s</div>
+                <div className="bg-[#121318]/80 rounded-xl border border-gray-800/50 p-3 flex items-center justify-between flex-1 opacity-80">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full border border-[#10b981]/50 bg-gray-900 flex items-center justify-center shrink-0 overflow-hidden shadow-[0_0_10px_rgba(16,185,129,0.2)]">
+                      <div className="w-5 h-5 bg-[#3b82f6] rounded shadow-inner"></div>
+                    </div>
+                    <div className="flex flex-col">
+                      <span className="text-white text-[13px] font-bold flex items-center gap-1.5"><CountryFlag code="GB"/> Reference</span>
+                      <span className="text-gray-400 text-[10px] tracking-widest font-mono mt-0.5">Lap <span className="text-white text-xs">{formatTime(activeData.lapTimeRef || 0)}</span></span>
+                    </div>
+                  </div>
+                  <div className="flex gap-4 text-[11px] font-bold text-gray-300 font-mono text-right shrink-0">
+                    <span>{Math.round(activeData.speedRef || 0)} km/h</span>
+                    <span>⚙ {activeData.gearRef === 0 ? 'R' : activeData.gearRef || 1}</span>
+                    <span>RPM {Math.round(activeData.rpmRef || 0)}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-4 px-1 mt-1">
+                <div className="bg-[#181a24] rounded-full flex border border-gray-700 text-[11px] font-sans font-bold p-[2px]">
+                  <button onClick={() => setXAxisMode('Dist')} className={`px-4 py-1 rounded-full transition-colors ${xAxisMode === 'Dist' ? 'bg-[#3b82f6] text-white shadow-md' : 'text-gray-400 hover:text-white'}`}>Dist</button>
+                  <button onClick={() => setXAxisMode('Time')} className={`px-4 py-1 rounded-full transition-colors ${xAxisMode === 'Time' ? 'bg-[#3b82f6] text-white shadow-md' : 'text-gray-400 hover:text-white'}`}>Time</button>
+                </div>
+                <div className="flex items-center gap-3 text-[9px] font-bold text-gray-400 uppercase tracking-widest flex-1 justify-center">
+                  TRACE ZOOM <input type="range" className="w-32 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer opacity-70" /> 15S
+                </div>
+                <button className="text-gray-300 text-[10px] font-bold px-3 py-1.5 rounded-md bg-[#1a1b26] border border-gray-700 flex items-center gap-1.5 hover:bg-gray-800 transition">EXPORT <ChevronDown size={12}/></button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-5 py-3 scrollbar-hide flex flex-col gap-1">
+              <TraceChart data={data} dataKeyMy="delta" dataKeyRef="delta" colorMy="#ef4444" colorRef="transparent" label="DELTA" domain={['-2', '2']} activeMy={delta} activeRef={0} />
+              <TraceChart data={data} dataKeyMy="throttleMy" dataKeyRef="throttleRef" colorMy="#10b981" colorRef="#059669" label="THROTTLE" domain={[0, 105]} isArea={true} activeMy={myThrottle} activeRef={refThrottle} />
+              <TraceChart data={data} dataKeyMy="brakeMy" dataKeyRef="brakeRef" colorMy="#ef4444" colorRef="#b91c1c" label="BRAKE" domain={[0, 105]} isArea={true} activeMy={myBrake} activeRef={refBrake} />
+              <TraceChart data={data} dataKeyMy="speedMy" dataKeyRef="speedRef" colorMy="#06b6d4" colorRef="#164e63" label="SPEED" domain={['auto', 'auto']} activeMy={mySpeed} activeRef={refSpeed} />
+              <TraceChart data={data} dataKeyMy="steeringMy" dataKeyRef="steeringRef" colorMy="#8b5cf6" colorRef="#4c1d95" label="STEERING" domain={[-180, 180]} activeMy={mySteering} activeRef={refSteering} />
+              <TraceChart data={data} dataKeyMy="gearMy" dataKeyRef="gearRef" colorMy="#a855f7" colorRef="#581c87" label="GEAR" domain={[0, 8]} isStep={true} activeMy={myGear} activeRef={refGear} />
+              <TraceChart data={data} dataKeyMy="rpmMy" dataKeyRef="rpmRef" colorMy="#d97706" colorRef="#78350f" label="ENGINE RPM" domain={['auto', 'auto']} activeMy={myRPM} activeRef={refRPM} />
+            </div>
           </div>
-          <button className="bg-[#212332] p-1.5 rounded text-gray-500 hover:text-white transition"><Search size={12}/></button>
-          <button className="bg-[#212332] p-1.5 rounded text-gray-500 hover:text-white transition"><Trash2 size={12}/></button>
+        )}
+      </div>
+
+      {/* ========================================================= */}
+      {/* GROS HUD SYMÉTRIQUE DU BAS (Seulement si Traces MASQUÉS)  */}
+      {/* ========================================================= */}
+      {!showTraces && (
+        <div className="w-full bg-[#0d0e12]/90 backdrop-blur-md border-t border-gray-800 flex flex-col pt-3 pb-4 px-8 gap-3 z-30 font-mono text-white shrink-0">
+          {/* LIGNE 1 : INFOS ENVIRONNEMENT & CHRONOS */}
+          <div className="flex justify-between items-end text-[10px] font-bold tracking-widest uppercase relative">
+            <div className="flex items-center gap-4">
+              <span className="text-[#eab308] font-black">Current</span>
+              <div className="flex items-center gap-3.5 text-gray-300">
+                <span className="flex items-center gap-1.5"><Fuel size={12} className="text-[#eab308]" /> {myFuel} L</span>
+                <span className="flex items-center gap-1.5"><Activity size={12} className="text-[#3b82f6]" /> {myVE}%</span>
+                <span className="flex items-center gap-1.5 text-[#3b82f6]"><Thermometer size={12} /> {myAir}°C</span>
+                <span className="flex items-center gap-1.5 text-[#f97316]"><Flame size={12} /> {myTrack}°C</span>
+                <span className="flex items-center gap-1.5 text-[#10b981]">
+                  <Wind size={12} /> {myWind} m/s 
+                  <Navigation size={10} className="ml-0.5 opacity-80" style={{ transform: `rotate(${myWindHeading}deg)` }} />
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-end gap-16 absolute left-1/2 transform -translate-x-1/2 bottom-0">
+              <div className="text-gray-400 font-sans tracking-wide flex items-baseline gap-2 pb-1">
+                Lap <span className="text-white text-[18px] font-mono font-bold leading-none">{liveData?.MyLastLap ? liveData.MyLastLap.toFixed(3) : '0:00.000'}</span>
+              </div>
+              <div className="flex flex-col items-center">
+                <span className={`text-[24px] font-black leading-none ${Number(delta) > 0 ? 'text-[#ef4444]' : 'text-[#10b981]'}`}>
+                  {Number(delta) > 0 ? '+' : ''}{delta}s
+                </span>
+                <div className="text-gray-500 text-[10px] mt-1 leading-none font-bold">
+                  {Number(delta) > 0 ? '' : '+'}{deltaDist} m
+                </div>
+              </div>
+              <div className="text-gray-400 font-sans tracking-wide flex items-baseline gap-2 pb-1">
+                Lap <span className="text-white text-[18px] font-mono font-bold leading-none">0:00.000</span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-3.5 text-gray-400 opacity-80">
+                <span className="flex items-center gap-1.5"><Fuel size={12} className="text-[#eab308]" /> {refFuel} L</span>
+                <span className="flex items-center gap-1.5"><Activity size={12} className="text-[#3b82f6]" /> {refVE}%</span>
+                <span className="flex items-center gap-1.5 text-[#3b82f6]"><Thermometer size={12} /> {refAir}°C</span>
+                <span className="flex items-center gap-1.5 text-[#f97316]"><Flame size={12} /> {refTrack}°C</span>
+                <span className="flex items-center gap-1.5 text-[#10b981]">
+                  <Wind size={12} /> {refWind} m/s
+                  <Navigation size={10} className="ml-0.5 opacity-80" style={{ transform: `rotate(${refWindHeading}deg)` }} />
+                </span>
+              </div>
+              <span className="text-[#3b82f6] font-black">Reference</span>
+            </div>
+          </div>
+
+          {/* LIGNE 2 : TÉLÉMÉTRIE SYMÉTRIQUE */}
+          <div className="flex justify-between items-center mt-2 relative">
+            <div className="flex items-center gap-6 w-[40%]">
+              <div className="flex flex-col items-center justify-center w-16">
+                <img src="/steering-wheel.png" alt="Steering" className="w-14 h-14 object-contain transition-transform duration-75" style={{ transform: `rotate(${mySteering}deg)` }} />
+                <span className="text-[10px] text-gray-400 font-sans mt-0.5 font-bold">{Math.round(mySteering)}°</span>
+              </div>
+              <div className="flex flex-col gap-2 w-32">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-gray-500 font-sans font-bold w-6">THR</span>
+                  <div className="flex-1 h-3.5 bg-[#181924] rounded-sm overflow-hidden border border-gray-800">
+                    <div className="h-full bg-[#10b981] transition-all duration-75" style={{width: `${myThrottle}%`}}></div>
+                  </div>
+                  <span className="text-[10px] w-8 text-right text-gray-200 font-bold">{Math.round(myThrottle)}%</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-gray-500 font-sans font-bold w-6">BRK</span>
+                  <div className="flex-1 h-3.5 bg-[#181924] rounded-sm overflow-hidden border border-gray-800">
+                    <div className="h-full bg-[#ef4444] transition-all duration-75" style={{width: `${myBrake}%`}}></div>
+                  </div>
+                  <span className="text-[10px] w-8 text-right text-gray-200 font-bold">{Math.round(myBrake)}%</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-6 ml-6">
+                <div className="flex items-center justify-center w-11 h-11 rounded-full border-2 border-gray-700 bg-transparent">
+                  <span className="text-[22px] font-black text-white leading-none">{myGear === 0 ? 'R' : myGear}</span>
+                </div>
+                <div className="flex items-baseline gap-1">
+                  <Zap size={14} className="text-gray-500 mr-1" strokeWidth={2.5}/>
+                  <span className="text-[32px] font-black text-white tracking-tighter leading-none">{Math.round(mySpeed)}</span>
+                  <span className="text-[10px] text-gray-500 font-sans ml-1 font-bold">km/h</span>
+                </div>
+                <div className="flex items-baseline gap-1 ml-4">
+                  <Gauge size={14} className="text-gray-500 mr-1" strokeWidth={2.5}/>
+                  <span className="text-xl font-bold text-gray-200 leading-none">{Math.round(myRPM)}</span>
+                  <span className="text-[10px] text-gray-500 font-sans ml-1 font-bold">rpm</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="absolute left-1/2 transform -translate-x-1/2 flex items-center gap-4">
+              <div className="bg-[#181a24] border border-gray-700 rounded-full px-5 py-2 text-gray-300 text-[11px] font-sans font-bold flex items-center gap-2 cursor-pointer hover:bg-gray-800 transition-colors">
+                Best lap <ChevronDown size={14}/>
+              </div>
+              <div className="bg-[#181a24] rounded-full flex border border-gray-700 text-[11px] font-sans font-bold p-[2px]">
+                <button 
+                  onClick={() => setXAxisMode('Dist')} 
+                  className={`px-4 py-1 rounded-full transition-colors ${xAxisMode === 'Dist' ? 'bg-[#3b82f6] text-white shadow-md' : 'text-gray-400 hover:text-white'}`}
+                >
+                  Dist
+                </button>
+                <button 
+                  onClick={() => setXAxisMode('Time')} 
+                  className={`px-4 py-1 rounded-full transition-colors ${xAxisMode === 'Time' ? 'bg-[#3b82f6] text-white shadow-md' : 'text-gray-400 hover:text-white'}`}
+                >
+                  Time
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-6 w-[40%] justify-end opacity-70">
+              <div className="flex items-center gap-6 mr-6">
+                <div className="flex items-baseline gap-1 mr-4">
+                  <Gauge size={14} className="text-gray-500 mr-1" strokeWidth={2.5}/>
+                  <span className="text-xl font-bold text-gray-300 leading-none">{Math.round(refRPM)}</span>
+                  <span className="text-[10px] text-gray-500 font-sans ml-1 font-bold">rpm</span>
+                </div>
+                <div className="flex items-baseline gap-1">
+                  <Zap size={14} className="text-gray-500 mr-1" strokeWidth={2.5}/>
+                  <span className="text-[32px] font-black text-gray-200 tracking-tighter leading-none">{Math.round(refSpeed)}</span>
+                  <span className="text-[10px] text-gray-500 font-sans ml-1 font-bold">km/h</span>
+                </div>
+                <div className="flex items-center justify-center w-11 h-11 rounded-full border-2 border-gray-700 bg-transparent">
+                  <span className="text-[22px] font-black text-gray-300 leading-none">{refGear === 0 ? 'R' : refGear}</span>
+                </div>
+              </div>
+              <div className="flex flex-col gap-2 w-32">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] w-8 text-gray-300 font-bold text-left">{Math.round(refThrottle)}%</span>
+                  <div className="flex-1 h-3.5 bg-[#181924] rounded-sm overflow-hidden border border-gray-800 flex justify-end">
+                    <div className="h-full bg-[#4ade80] opacity-60 transition-all duration-75" style={{width: `${refThrottle}%`}}></div>
+                  </div>
+                  <span className="text-[9px] text-gray-600 font-sans font-bold w-6 text-right">THR</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] w-8 text-gray-300 font-bold text-left">{Math.round(refBrake)}%</span>
+                  <div className="flex-1 h-3.5 bg-[#181924] rounded-sm overflow-hidden border border-gray-800 flex justify-end">
+                    <div className="h-full bg-[#ef4444] opacity-60 transition-all duration-75" style={{width: `${refBrake}%`}}></div>
+                  </div>
+                  <span className="text-[9px] text-gray-600 font-sans font-bold w-6 text-right">BRK</span>
+                </div>
+              </div>
+              <div className="flex flex-col items-center justify-center w-16">
+                <img src="/steering-wheel.png" alt="Ref Steering" className="w-14 h-14 object-contain transition-transform duration-75" style={{ transform: `rotate(${refSteering}deg)` }} />
+                <span className="text-[10px] text-gray-400 font-sans mt-0.5 font-bold">{Math.round(refSteering)}°</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* BARRE DE LECTURE GLOBALE (Partagée en bas en permanence)  */}
+      {/* ========================================================= */}
+      <div className="h-14 bg-[#0a0a0f] border-t border-gray-800 flex items-center px-6 gap-4 z-40 shrink-0 shadow-[0_-5px_20px_rgba(0,0,0,0.5)] relative">
+        <div className="flex items-center gap-3 text-gray-400 shrink-0">
+          <button onClick={() => setHoverIndex(0)} className="hover:text-white transition-colors" title="Restart"><RotateCcw size={16} strokeWidth={2}/></button>
+          <button onClick={() => setIsPlaying(!isPlaying)} className="bg-white text-black p-2 rounded-full hover:bg-gray-200 transition-colors shadow-[0_0_15px_rgba(255,255,255,0.2)]">
+            {isPlaying ? <Pause size={14} fill="currentColor" strokeWidth={0} /> : <Play size={14} fill="currentColor" strokeWidth={0} />}
+          </button>
+          <button onClick={() => setHoverIndex((prev) => Math.min((prev || 0) + 10, data.length - 1))} className="hover:text-white transition-colors" title="Forward 10 frames"><StepForward size={16} strokeWidth={2}/></button>
+          <button onClick={() => setPlaybackSpeed(prev => prev === 1 ? 2 : prev === 2 ? 0.5 : 1)} className="hover:text-white transition-colors ml-1 flex items-center gap-1" title="Playback Speed">
+            <Gauge size={16} strokeWidth={2}/> <span className="text-[9px] font-bold">{playbackSpeed}x</span>
+          </button>
+        </div>
+        
+        {/* TEMPS INITIAL DYNAMIQUE */}
+        <span className="text-[11px] text-gray-500 w-16 text-right font-bold tracking-wide font-mono shrink-0">0:00.000</span>
+        
+        <div className="flex-1 relative flex items-center h-6 group cursor-pointer px-1">
+          <input 
+            type="range" min="0" max={data.length > 0 ? data.length - 1 : 100} 
+            value={hoverIndex !== null ? hoverIndex : 0} 
+            onChange={(e) => setHoverIndex(Number(e.target.value))}
+            className="w-full absolute inset-0 opacity-0 cursor-pointer z-20"
+          />
+          <div className="w-full h-1.5 bg-[#181924] rounded-full border border-gray-800 overflow-hidden relative z-0">
+            <div className="h-full bg-gray-500 rounded-full" style={{ width: `${data.length > 0 && hoverIndex !== null ? (hoverIndex / data.length) * 100 : 0}%` }}></div>
+          </div>
+          <div className="absolute w-3 h-3 bg-white rounded-full shadow-[0_0_10px_#ffffff] z-10 pointer-events-none transition-all duration-75" style={{ left: `calc(${data.length > 0 && hoverIndex !== null ? (hoverIndex / data.length) * 100 : 0}% - 6px)` }}></div>
+        </div>
+        
+        {/* TEMPS FIN DYNAMIQUE */}
+        <span className="text-[11px] text-gray-500 w-16 font-bold tracking-wide font-mono shrink-0 text-left">
+          {data.length > 0 ? formatTime(data[data.length - 1].lapTimeMy) : '0:00.000'}
+        </span>
+        
+        {/* BOUTON TOGGLE (TRACES <-> TRACK MAP) */}
+        <button 
+          onClick={() => setShowTraces(!showTraces)}
+          className="text-[10px] text-gray-300 font-bold uppercase tracking-widest flex items-center gap-1.5 hover:text-white transition-colors ml-4 mr-2 shrink-0 bg-[#1c1e2b] px-4 py-2 rounded border border-gray-700 hover:bg-gray-800"
+        >
+          {showTraces ? <><ChevronRight size={14} className="rotate-180 text-gray-500"/> TRACK MAP</> : <>TRACES <ChevronRight size={14} className="text-gray-500"/></>}
+        </button>
+        
+        <div className="w-8 h-8 rounded-full border-2 border-orange-500/30 flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(249,115,22,0.15)]">
+          <div className="w-4 h-4 rounded-full border-2 border-orange-500/80"></div>
         </div>
       </div>
     </div>
@@ -1091,34 +1580,6 @@ const ScheduleView = () => {
     return () => { isMounted = false; clearInterval(interval); };
   }, []);
 
-  const getTrackDetails = (trackStr: string) => {
-    const t = trackStr.toLowerCase();
-    const getImages = (id: string) => ({
-      LAYOUT: `/tracks/${id}_layout.svg`,
-      SECTORS: `/tracks/${id}_sectors.svg`,
-      CORNERS: `/tracks/${id}_corners.svg`,
-    });
-
-    if (t.includes('daytona')) return { name: 'Daytona International Speedway Road Course', location: 'Daytona Beach, FL · USA', code: 'US', images: getImages('daytona') };
-    if (t.includes('spa')) return { name: 'Circuit de Spa-Francorchamps', location: 'Stavelot, Wallonia · Belgium', code: 'BE', images: getImages('spa') };
-    if (t.includes('mans') || t.includes('sarthe')) return { name: 'Circuit de la Sarthe', location: 'Le Mans, Pays de la Loire · France', code: 'FR', images: getImages('lemans') };
-    if (t.includes('laguna') || t.includes('seca')) return { name: 'WeatherTech Raceway Laguna Seca', location: 'Monterey, CA · USA', code: 'US', images: getImages('laguna') };
-    if (t.includes('bahrain')) return { name: 'Bahrain International Circuit', location: 'Sakhir · Bahrain', code: 'BH', images: getImages('bahrain') };
-    if (t.includes('monza')) return { name: 'Autodromo Nazionale Monza', location: 'Monza, Lombardy · Italy', code: 'IT', images: getImages('monza') };
-    if (t.includes('ricard')) return { name: 'Circuit Paul Ricard', location: 'Le Castellet · France', code: 'FR', images: getImages('paulricard') };
-    if (t.includes('barcelona') || t.includes('catalunya')) return { name: 'Circuit de Barcelona-Catalunya', location: 'Montmeló, Catalonia · Spain', code: 'ES', images: getImages('barcelona') };
-    if (t.includes('fuji')) return { name: 'Fuji Speedway', location: 'Oyama, Shizuoka · Japan', code: 'JP', images: getImages('fuji') };
-    if (t.includes('interlagos') || t.includes('pace')) return { name: 'Autódromo José Carlos Pace', location: 'São Paulo · Brazil', code: 'BR', images: getImages('interlagos') };
-    if (t.includes('portim') || t.includes('algarve')) return { name: 'Algarve International Circuit', location: 'Portimão, Algarve · Portugal', code: 'PT', images: getImages('portimao') };
-    if (t.includes('sebri')) return { name: 'Sebring International Raceway', location: 'Sebring, FL · USA', code: 'US', images: getImages('sebring') };
-    if (t.includes('imola') || t.includes('enzo')) return { name: 'Autodromo Enzo e Dino Ferrari', location: 'Imola, Emilia-Romagna · Italy', code: 'IT', images: getImages('imola') };
-    if (t.includes('cota') || t.includes('americas')) return { name: 'Circuit of the Americas', location: 'Austin, TX · USA', code: 'US', images: getImages('cota') };
-    if (t.includes('silverstone')) return { name: 'Silverstone Circuit', location: 'Silverstone, Northamptonshire · UK', code: 'GB', images: getImages('silverstone') };
-    if (t.includes('losail') || t.includes('qatar')) return { name: 'Losail International Circuit', location: 'Lusail · Qatar', code: 'QA', images: getImages('losail') };
-    
-    return { name: trackStr, location: 'International Circuit', code: 'UN', images: getImages('unknown') };
-  };
-
   const allEvents = Array.from(new Map([...nextUpEvents, ...upcomingEvents].map(e => [e.id, e])).values())
                          .sort((a, b) => a.timestamp - b.timestamp);
 
@@ -1700,6 +2161,34 @@ const BRAND_LOGOS: Record<string, string> = {
   'Adess': 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/11/ADESS_AG_Logo.png/320px-ADESS_AG_Logo.png'
 };
 
+const getTrackDetails = (trackStr: string) => {
+  const t = trackStr.toLowerCase();
+  const getImages = (id: string) => ({
+    LAYOUT: `/tracks/${id}_layout.svg`,
+    SECTORS: `/tracks/${id}_sectors.svg`,
+    CORNERS: `/tracks/${id}_corners.svg`,
+  });
+
+  if (t.includes('daytona')) return { name: 'Daytona International Speedway Road Course', location: 'Daytona Beach, FL · USA', code: 'US', images: getImages('daytona') };
+  if (t.includes('spa')) return { name: 'Circuit de Spa-Francorchamps', location: 'Stavelot, Wallonia · Belgium', code: 'BE', images: getImages('spa') };
+  if (t.includes('mans') || t.includes('sarthe')) return { name: 'Circuit de la Sarthe', location: 'Le Mans, Pays de la Loire · France', code: 'FR', images: getImages('lemans') };
+  if (t.includes('laguna') || t.includes('seca')) return { name: 'WeatherTech Raceway Laguna Seca', location: 'Monterey, CA · USA', code: 'US', images: getImages('laguna') };
+  if (t.includes('bahrain')) return { name: 'Bahrain International Circuit', location: 'Sakhir · Bahrain', code: 'BH', images: getImages('bahrain') };
+  if (t.includes('monza')) return { name: 'Autodromo Nazionale Monza', location: 'Monza, Lombardy · Italy', code: 'IT', images: getImages('monza') };
+  if (t.includes('ricard')) return { name: 'Circuit Paul Ricard', location: 'Le Castellet · France', code: 'FR', images: getImages('paulricard') };
+  if (t.includes('barcelona') || t.includes('catalunya')) return { name: 'Circuit de Barcelona-Catalunya', location: 'Montmeló, Catalonia · Spain', code: 'ES', images: getImages('barcelona') };
+  if (t.includes('fuji')) return { name: 'Fuji Speedway', location: 'Oyama, Shizuoka · Japan', code: 'JP', images: getImages('fuji') };
+  if (t.includes('interlagos') || t.includes('pace')) return { name: 'Autódromo José Carlos Pace', location: 'São Paulo · Brazil', code: 'BR', images: getImages('interlagos') };
+  if (t.includes('portim') || t.includes('algarve')) return { name: 'Algarve International Circuit', location: 'Portimão, Algarve · Portugal', code: 'PT', images: getImages('portimao') };
+  if (t.includes('sebri')) return { name: 'Sebring International Raceway', location: 'Sebring, FL · USA', code: 'US', images: getImages('sebring') };
+  if (t.includes('imola') || t.includes('enzo')) return { name: 'Autodromo Enzo e Dino Ferrari', location: 'Imola, Emilia-Romagna · Italy', code: 'IT', images: getImages('imola') };
+  if (t.includes('cota') || t.includes('americas')) return { name: 'Circuit of the Americas', location: 'Austin, TX · USA', code: 'US', images: getImages('cota') };
+  if (t.includes('silverstone')) return { name: 'Silverstone Circuit', location: 'Silverstone, Northamptonshire · UK', code: 'GB', images: getImages('silverstone') };
+  if (t.includes('losail') || t.includes('qatar')) return { name: 'Losail International Circuit', location: 'Lusail · Qatar', code: 'QA', images: getImages('losail') };
+  
+  return { name: trackStr, location: 'International Circuit', code: 'UN', images: getImages('unknown') };
+};
+
 const getTrackCountryCode = (trackName: string) => {
   const lower = trackName.toLowerCase();
   if (lower.includes('daytona') || lower.includes('laguna') || lower.includes('seca') || lower.includes('cota') || lower.includes('americas') || lower.includes('sebri')) return 'US';
@@ -1727,17 +2216,22 @@ const getClassColor = (cls: string) => {
     default: return 'border-gray-600/50 text-gray-400 bg-gray-800/10';
   }
 };
+
 // =========================================================================
-// COMPOSANT PRINCIPAL ANALYTICS VIEW
+// COMPOSANT PRINCIPAL ANALYTICS VIEW (Propre, sans espaces invisibles)
 // =========================================================================
-const AnalyticsView = () => {
+const AnalyticsView = ({ setActiveMenu, setSelectedHistorySession }: any) => {
   // Navigation principale
   const [activeTab, setActiveTab] = useState<'Overall' | 'Deeper' | 'LapTimes' | 'Tracks'>('Overall');
+  
+  // État pour le graphique déroulant "Lap Times by Track"
+  const [expandedTrack, setExpandedTrack] = useState<string | null>(null);
   
   // Filtres globaux
   const [activeMode, setActiveMode] = useState<'All Modes' | 'Online' | 'Offline'>('Online');
   const [activeType, setActiveType] = useState<'All Types' | 'Races' | 'Qualifying' | 'Practice'>('Practice');
   const [category, setCategory] = useState('All Categories');
+  const [trackNationFilter, setTrackNationFilter] = useState('All Nations');
   const [isTrackDropdownOpen, setIsTrackDropdownOpen] = useState(false);
   const [isCarDropdownOpen, setIsCarDropdownOpen] = useState(false);
 
@@ -1745,6 +2239,21 @@ const AnalyticsView = () => {
   const [selectedTrack, setSelectedTrack] = useState('Select track');
   const [selectedCar, setSelectedCar] = useState('Select car');
   const [activeMetric, setActiveMetric] = useState<'Tyre Wear' | 'Consumption' | 'Top Speed'>('Tyre Wear');
+  const [isNationDropdownOpen, setIsNationDropdownOpen] = useState(false);
+
+  const TRACK_NATIONS = [
+    { code: 'PT', name: 'PORTUGAL' },
+    { code: 'IT', name: 'ITALY' },
+    { code: 'BR', name: 'BRAZIL' },
+    { code: 'BH', name: 'BAHRAIN' },
+    { code: 'ES', name: 'SPAIN' },
+    { code: 'FR', name: 'FRANCE' },
+    { code: 'BE', name: 'BELGIUM' },
+    { code: 'US', name: 'USA' },
+    { code: 'JP', name: 'JAPAN' },
+    { code: 'GB', name: 'GREAT BRITAIN' },
+    { code: 'QA', name: 'QATAR' }
+  ];
 
   // Filtrage dynamique des voitures selon la catégorie choisie
   const availableCars = Object.keys(LMU_CARS).filter(carKey => {
@@ -1768,29 +2277,237 @@ const AnalyticsView = () => {
     </button>
   );
 
-  // NOUVEAU : État pour stocker TES vraies statistiques de joueur
-  const [playerStats, setPlayerStats] = useState({
-    total_sessions: 0,
-    practice_sessions: 0,
-    qualy_sessions: 0,
-    race_sessions: 0,
-    unique_tracks: 0,
-    unique_combos: 0
+  // --- ÉTATS DE DONNÉES DYNAMIQUES ---
+  const [isLoading, setIsLoading] = useState(false);
+  
+  // L'unique structure globale qui connecte l'UI aux futures données de DuckDB
+  const [stats, setStats] = useState({
+    sessions: 0, wins: 0, podiums: 0, top5: 0, poles: 0, top3Starts: 0,
+    avgFinish: 0.0, fastestLaps: 0, lapsLed: 0, lapsCompleted: 0,
+    tracksPracticed: 0, combos: 0,
+    categoryBreakdown: [] as any[],
+    trackPerformance: [] as any[],
+    trackCarCombos: [] as any[],
+    topTracks: [] as any[],
+    trackProficiency: [] as any[],
+    dnfIndicator: 0, dnfs: 0, dnfRate: 0.0, currentStreak: 0, highestStreak: 0,
+    // --- NOUVEAU : DONNÉES LAP TIMES ---
+    lapTimesData: {
+      totalValid: 0,
+      totalTracks: 0,
+      byType: { race: 0, qualy: 0, practice: 0 },
+      byMode: { online: 0, offline: 0 },
+      byCategory: [] as any[],
+      byTrack: [] as any[],
+      allSessions: [] as any[]
+    }
   });
 
-  // NOUVEAU : Récupération de l'historique au chargement du panneau
+  // --- MOTEUR DE CALCUL DYNAMIQUE (Basé sur l'historique XML existant) ---
   useEffect(() => {
     let isMounted = true;
-    fetch('http://127.0.0.1:8000/api/analytics/overall')
+    setIsLoading(true);
+
+    fetch('http://127.0.0.1:8000/api/sessions/history')
       .then(res => res.json())
       .then(json => {
         if (isMounted && json.status === 'success') {
-          setPlayerStats(json.data);
+          const allSessions = json.data;
+          
+          // 1. Filtrage local
+          const filtered = allSessions.filter((s: any) => {
+            const sType = s.type ? s.type.toUpperCase() : '';
+            let typeMatch = activeType === 'All Types';
+            if (activeType === 'Practice' && sType.includes('PRACTICE')) typeMatch = true;
+            if (activeType === 'Qualifying' && sType.includes('QUALIFY')) typeMatch = true;
+            if (activeType === 'Races' && sType.includes('RACE')) typeMatch = true;
+
+            const sClass = s.class ? s.class.toUpperCase() : '';
+            let catMatch = category === 'All Categories';
+            if (category !== 'All Categories') {
+              catMatch = sClass.includes(category.substring(0, 4).toUpperCase()) || category.toUpperCase().includes(sClass.substring(0, 4));
+            }
+            return typeMatch && catMatch;
+          });
+
+          // 2. Agréger les statistiques globales (Overall)
+          let wins = 0, podiums = 0, top5 = 0, poles = 0, top3Starts = 0;
+          let totalFinish = 0, totalQual = 0, lapsCompleted = 0;
+          const trackMap = new Map();
+          const comboMap = new Map();
+          const categoryMap = new Map();
+
+          filtered.forEach((s: any) => {
+            const finishPos = parseInt(String(s.finish).replace(/\D/g, '')) || 0;
+            const gridPos = parseInt(String(s.grid).replace(/\D/g, '')) || 0;
+            const laps = parseInt(s.laps) || 0;
+
+            if (finishPos === 1) wins++;
+            if (finishPos > 0 && finishPos <= 3) podiums++;
+            if (finishPos > 0 && finishPos <= 5) top5++;
+            if (gridPos === 1) poles++;
+            if (gridPos > 0 && gridPos <= 3) top3Starts++;
+            
+            totalFinish += finishPos;
+            totalQual += gridPos;
+            lapsCompleted += laps;
+
+            if (!trackMap.has(s.track)) {
+              trackMap.set(s.track, { track: s.track, sessions: 0, bestLap: '9:99.999', totalFinish: 0, totalQual: 0, category: s.class, car: s.car });
+            }
+            const t = trackMap.get(s.track);
+            t.sessions++;
+            t.totalFinish += finishPos;
+            t.totalQual += gridPos;
+            if (s.best && s.best !== '--:--.---' && s.best < t.bestLap) t.bestLap = s.best;
+            
+            if (!categoryMap.has(s.class)) {
+              categoryMap.set(s.class, { category: s.class, sessions: 0, races: 0, wins: 0, podiums: 0, totalQual: 0, totalFinish: 0 });
+            }
+            const c = categoryMap.get(s.class);
+            c.sessions++;
+            c.races++;
+            if (finishPos === 1) c.wins++;
+            if (finishPos > 0 && finishPos <= 3) c.podiums++;
+            c.totalFinish += finishPos;
+            c.totalQual += gridPos;
+
+            comboMap.set(`${s.track}-${s.car}`, true);
+          });
+
+          // 3. Agréger les statistiques spécifiques à la vue "Lap Times"
+          const validLapSessions = filtered.filter((s: any) => s.best && s.best !== '--:--.---' && s.best !== '0:00.000');
+          let ltRace = 0, ltQualy = 0, ltPractice = 0, ltOnline = 0, ltOffline = 0;
+          const ltCategoryMap = new Map();
+          const ltTrackMap = new Map();
+
+          const timeToSecs = (t: string) => {
+            if (!t || t === '--:--.---') return Infinity;
+            const [m, sec] = t.split(':');
+            return parseInt(m) * 60 + parseFloat(sec);
+          };
+
+          const formatSecs = (secs: number) => {
+            if (secs === Infinity || !secs || isNaN(secs)) return '-';
+            const m = Math.floor(secs / 60);
+            const sec = (secs % 60).toFixed(3);
+            return `${m}:${sec.padStart(6, '0')}`;
+          };
+
+          validLapSessions.forEach((s: any) => {
+            const sType = s.type ? s.type.toUpperCase() : '';
+            if (sType.includes('RACE')) ltRace++;
+            if (sType.includes('QUALIFY')) ltQualy++;
+            if (sType.includes('PRACTICE')) ltPractice++;
+            if (s.mode === 'Multiplayer') ltOnline++; else ltOffline++;
+
+            if (!ltCategoryMap.has(s.class)) ltCategoryMap.set(s.class, { category: s.class, sessions: 0, tracks: new Set() });
+            const cMap = ltCategoryMap.get(s.class);
+            cMap.sessions++;
+            cMap.tracks.add(s.track);
+
+            if (!ltTrackMap.has(s.track)) {
+              ltTrackMap.set(s.track, {
+                track: s.track, sessions: 0, races: Infinity, qualy: Infinity, practice: Infinity,
+                onlineBest: Infinity, offlineBest: Infinity, overallBest: Infinity, sessionList: []
+              });
+            }
+            const tMap = ltTrackMap.get(s.track);
+            tMap.sessions++;
+            tMap.sessionList.push(s);
+            
+            const secs = timeToSecs(s.best);
+            if (sType.includes('RACE')) tMap.races = Math.min(tMap.races, secs);
+            if (sType.includes('QUALIFY')) tMap.qualy = Math.min(tMap.qualy, secs);
+            if (sType.includes('PRACTICE')) tMap.practice = Math.min(tMap.practice, secs);
+            if (s.mode === 'Multiplayer') tMap.onlineBest = Math.min(tMap.onlineBest, secs);
+            else tMap.offlineBest = Math.min(tMap.offlineBest, secs);
+            tMap.overallBest = Math.min(tMap.overallBest, secs);
+          });
+
+          // 4. Assemblage final et mathématiques (Moyennes, Ecart Types)
+          const sessionsCount = filtered.length;
+          
+          const trackPerf = Array.from(trackMap.values()).map((t: any) => ({
+            ...t,
+            bestLap: t.bestLap === '9:99.999' ? '--:--.---' : t.bestLap,
+            avgFinish: t.sessions > 0 ? (t.totalFinish / t.sessions) : 0,
+            avgQual: t.sessions > 0 ? (t.totalQual / t.sessions) : 0,
+            avgLap: '--:--.---'
+          }));
+
+          const catBreakdown = Array.from(categoryMap.values()).map((c: any) => ({
+            ...c,
+            avgFinish: c.races > 0 ? (c.totalFinish / c.races) : 0,
+            avgQual: c.races > 0 ? (c.totalQual / c.races) : 0,
+            avgPos: c.races > 0 ? ((c.totalFinish + c.totalQual) / (c.races * 2)) : 0
+          }));
+
+          // CALCUL DES MOYENNES ET DE LA CONSTANCE POUR LE GRAPHIQUE
+          const byTrackData = Array.from(ltTrackMap.values()).map((t: any) => {
+            const validSecs = t.sessionList.map((s:any) => timeToSecs(s.best)).filter((sec:number) => sec !== Infinity);
+            const pb = Math.min(...validSecs);
+            
+            let avgLapStr = '--:--.---';
+            let stdDevStr = '--.---s';
+            let consistencyStr = '--/--';
+
+            if (validSecs.length > 0) {
+               const sum = validSecs.reduce((a:number, b:number) => a + b, 0);
+               const avg = sum / validSecs.length;
+               avgLapStr = formatSecs(avg);
+
+               if (validSecs.length > 1) {
+                 const variance = validSecs.reduce((a:number, b:number) => a + Math.pow(b - avg, 2), 0) / validSecs.length;
+                 stdDevStr = Math.sqrt(variance).toFixed(3) + 's';
+               }
+
+               const withinHalfSec = validSecs.filter((sec:number) => sec <= pb + 0.5).length;
+               consistencyStr = `${withinHalfSec}/${validSecs.length}`;
+            }
+
+            return {
+              track: t.track, sessions: t.sessions,
+              races: formatSecs(t.races), qualy: formatSecs(t.qualy), practice: formatSecs(t.practice),
+              onlineBest: formatSecs(t.onlineBest), offlineBest: formatSecs(t.offlineBest),
+              offlineDelta: '-', overallBest: formatSecs(t.overallBest),
+              sessionList: t.sessionList.sort((a: any, b: any) => new Date(a.date).getTime() - new Date(b.date).getTime()),
+              calculatedAvgLap: avgLapStr,
+              calculatedStdDev: stdDevStr,
+              calculatedConsistency: consistencyStr
+            };
+          });
+
+          // 5. UN SEUL setStats Global
+          setStats({
+            sessions: sessionsCount, wins, podiums, top5, poles, top3Starts,
+            avgFinish: sessionsCount > 0 ? (totalFinish / sessionsCount) : 0,
+            fastestLaps: 0, lapsLed: 0, lapsCompleted, tracksPracticed: trackMap.size, combos: comboMap.size,
+            categoryBreakdown: catBreakdown, trackPerformance: trackPerf, trackCarCombos: trackPerf,
+            topTracks: [...trackPerf].sort((a, b) => a.avgFinish - b.avgFinish),
+            trackProficiency: trackPerf,
+            dnfIndicator: 0, dnfs: 0, dnfRate: 0.0, currentStreak: sessionsCount, highestStreak: sessionsCount,
+            lapTimesData: {
+              totalValid: validLapSessions.length,
+              totalTracks: ltTrackMap.size,
+              byType: { race: ltRace, qualy: ltQualy, practice: ltPractice },
+              byMode: { online: ltOnline, offline: ltOffline },
+              byCategory: Array.from(ltCategoryMap.values()).map((c: any) => ({
+                category: c.category, sessions: c.sessions, tracks: c.tracks.size, avgRef: '102.8%'
+              })),
+              byTrack: byTrackData,
+              allSessions: validLapSessions.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime())
+            }
+          });
         }
       })
-      .catch(err => console.error("Erreur chargement historique :", err));
+      .catch(err => console.error("Erreur Analytics :", err))
+      .finally(() => {
+        if (isMounted) setIsLoading(false);
+      });
+
     return () => { isMounted = false; };
-  }, []);
+  }, [activeMode, activeType, category, selectedTrack, selectedCar]);
 
   return (
     <div className="flex-1 flex flex-col h-full bg-[#09090b] text-gray-200 rounded-xl overflow-hidden shadow-2xl border border-gray-800/50">
@@ -1822,14 +2539,12 @@ const AnalyticsView = () => {
       <div className="px-6 py-4 bg-[#0d0e12] border-b border-gray-800/50 flex flex-wrap items-center gap-3">
         <div className="text-gray-500 pr-2 border-r border-gray-800"><Filter size={16} /></div>
         
-        {/* Mode Selector */}
         <div className="flex items-center bg-[#121318] rounded-full p-1 border border-gray-800/50">
           <FilterButton active={activeMode === 'All Modes'} onClick={() => setActiveMode('All Modes')} icon={LayoutGrid} label="All Modes" />
           <FilterButton active={activeMode === 'Online'} onClick={() => setActiveMode('Online')} icon={Wifi} label="Online" />
           <FilterButton active={activeMode === 'Offline'} onClick={() => setActiveMode('Offline')} icon={WifiOff} label="Offline" />
         </div>
 
-        {/* Session Type Selector */}
         <div className="flex items-center bg-[#121318] rounded-full p-1 border border-gray-800/50">
           <FilterButton active={activeType === 'All Types'} onClick={() => setActiveType('All Types')} icon={LayoutGrid} label="All Types" />
           <FilterButton active={activeType === 'Races'} onClick={() => setActiveType('Races')} icon={Flag} label="Races" />
@@ -1837,136 +2552,109 @@ const AnalyticsView = () => {
           <FilterButton active={activeType === 'Practice'} onClick={() => setActiveType('Practice')} icon={PlayCircle} label="Practice" />
         </div>
 
-        {/* Category Dropdown (5 Classes WEC Complètes) */}
         <div className="flex items-center gap-2 ml-2">
           <span className="text-xs text-gray-500 font-semibold">Category:</span>
           <select 
             value={category} 
             onChange={(e) => {
               setCategory(e.target.value);
-              setSelectedCar('Select car'); // Reset car on category change
+              setSelectedCar('Select car');
             }} 
-            className="bg-transparent text-sm font-bold text-gray-200 outline-none cursor-pointer border border-gray-800 rounded px-2 py-1"
+            className="bg-[#121318] text-sm font-bold text-gray-200 outline-none cursor-pointer border border-gray-800 rounded px-3 py-1.5"
           >
-            <option className="bg-[#121318]">All Categories</option>
-            <option className="bg-[#121318]">HYPERCAR</option>
-            <option className="bg-[#121318]">LMGT3</option>
-            <option className="bg-[#121318]">LMP2</option>
-            <option className="bg-[#121318]">LMP3</option>
-            <option className="bg-[#121318]">LMGTE</option>
+            <option>All Categories</option>
+            <option>HYPERCAR</option>
+            <option>LMGT3</option>
+            <option>LMP2</option>
+            <option>LMP3</option>
+            <option>LMGTE</option>
           </select>
         </div>
 
-        {/* Filtres contextuels pour "Deeper Analytics" */}
-        {activeTab === 'Deeper' && (
-          <>
-            <div className="w-[1px] h-6 bg-gray-800 mx-2"></div>
-            
-            {/* Select Track Custom avec VRAIS Drapeaux (Analytics) */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500 font-semibold">Track:</span>
-              <div className="relative">
-                <div onClick={() => setIsTrackDropdownOpen(!isTrackDropdownOpen)} className="bg-[#121318] border border-gray-800/80 text-xs font-bold text-gray-200 px-3 py-1.5 rounded-md cursor-pointer hover:bg-white/5 transition-colors min-w-[220px] max-w-[240px] flex items-center justify-between">
-                  <div className="flex items-center gap-2 truncate pr-2">
-                    {selectedTrack === 'Select track' ? <span>🌍 Select track</span> : (
-                      <><div className="flex-shrink-0"><CountryFlag code={getTrackCountryCode(selectedTrack)} /></div><span className="truncate">{selectedTrack}</span></>
-                    )}
-                  </div>
-                  <ChevronRight size={12} className={`shrink-0 text-gray-500 transform transition-transform ${isTrackDropdownOpen ? 'rotate-90' : ''}`} />
-                </div>
-                {isTrackDropdownOpen && (
-                  <>
-                    <div className="fixed inset-0 z-40" onClick={() => setIsTrackDropdownOpen(false)}></div>
-                    <div className="absolute top-full mt-2 left-0 w-[320px] max-h-64 overflow-y-auto bg-[#121318] border border-gray-800 rounded-md shadow-[0_10px_40px_rgba(0,0,0,0.8)] z-50 scrollbar-hide">
-                      <div onClick={() => { setSelectedTrack('Select track'); setIsTrackDropdownOpen(false); }} className="p-3 hover:bg-gray-800 cursor-pointer text-xs font-bold text-gray-400 border-b border-gray-800/50">🌍 Select track</div>
-                      {LMU_ALL_TRACKS.map(t => (
-                        <div key={t.name} onClick={() => { setSelectedTrack(t.name); setIsTrackDropdownOpen(false); }} className="p-3 hover:bg-[#1a1b26] cursor-pointer flex items-center gap-3 border-b border-gray-800/30 last:border-0 transition-colors">
-                          <div className="flex-shrink-0"><CountryFlag code={getTrackCountryCode(t.name)} /></div>
-                          <span className="text-xs font-bold text-gray-200 truncate">{t.name}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-
-            {/* Select Car Custom avec VRAIS Logos (Analytics) */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500 font-semibold">Car:</span>
-              <div className="relative">
-                <div onClick={() => setIsCarDropdownOpen(!isCarDropdownOpen)} className="bg-[#121318] border border-gray-800/80 text-xs font-bold text-gray-200 px-3 py-1.5 rounded-md cursor-pointer min-w-[240px] max-w-[260px] flex items-center justify-between transition-colors hover:bg-white/5">
-                  <div className="flex items-center gap-3 truncate pr-2">
-                    {selectedCar === 'Select car' ? <span>🏎️ Select car</span> : (
-                      <>
-                        <div className="w-5 flex justify-center shrink-0">
-                          <img src={BRAND_LOGOS[LMU_CARS[selectedCar]?.brand]} alt="" className="max-h-4 w-auto object-contain drop-shadow-md" />
-                        </div>
-                        <span className="truncate">{selectedCar}</span>
-                      </>
-                    )}
-                  </div>
-                  <ChevronRight size={12} className={`shrink-0 text-gray-500 transform transition-transform ${isCarDropdownOpen ? 'rotate-90' : ''}`} />
-                </div>
-                {isCarDropdownOpen && (
-                  <>
-                    <div className="fixed inset-0 z-40" onClick={() => setIsCarDropdownOpen(false)}></div>
-                    <div className="absolute top-full mt-2 left-0 w-[350px] max-h-64 overflow-y-auto bg-[#121318] border border-gray-800 rounded-md shadow-[0_10px_40px_rgba(0,0,0,0.8)] z-50 scrollbar-hide">
-                      <div onClick={() => { setSelectedCar('Select car'); setIsCarDropdownOpen(false); }} className="p-3 hover:bg-gray-800 cursor-pointer text-xs font-bold text-gray-400 border-b border-gray-800/50">🏎️ Select car</div>
-                      {availableCars.map(c => (
-                        <div key={c} onClick={() => { setSelectedCar(c); setIsCarDropdownOpen(false); }} className="p-3 hover:bg-[#1a1b26] cursor-pointer flex items-center gap-4 border-b border-gray-800/30 last:border-0 transition-colors">
-                          <div className="w-6 h-6 bg-white/5 rounded flex items-center justify-center shrink-0 p-1">
-                            <img src={BRAND_LOGOS[LMU_CARS[c]?.brand]} alt="" className="max-h-full max-w-full object-contain" />
-                          </div>
-                          <span className="text-xs font-bold text-gray-200 truncate">{c}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-
-            {/* Select Car (29 Voitures LMU) */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500 font-semibold">Car:</span>
-              <select 
-                value={selectedCar} 
-                onChange={(e) => setSelectedCar(e.target.value)} 
-                className="bg-[#121318] border border-gray-800/80 text-xs font-bold text-gray-200 px-3 py-1.5 rounded-md outline-none cursor-pointer max-w-[240px] truncate"
+        {/* --- NOUVEAU : Filtre Nation Custom (Visible uniquement sur l'onglet Tracks) --- */}
+        {activeTab === 'Tracks' && (
+          <div className="flex items-center gap-2 ml-2 border-l border-gray-800/50 pl-4 relative">
+            <span className="text-xs text-gray-500 font-semibold">Nation:</span>
+            <div className="relative">
+              <div 
+                onClick={() => setIsNationDropdownOpen(!isNationDropdownOpen)} 
+                className="bg-[#121318] border border-gray-800 text-xs font-bold text-gray-200 px-3 py-1.5 rounded-md cursor-pointer hover:bg-white/5 transition-colors min-w-[150px] flex items-center justify-between shadow-sm"
               >
-                <option value="Select car">Select car</option>
-                {availableCars.map(c => (
-                  <option key={c} value={c} className="bg-[#121318]">
-                    [{LMU_CARS[c].brand}] {c}
-                  </option>
-                ))}
-              </select>
+                <div className="flex items-center gap-2">
+                  {trackNationFilter === 'All Nations' ? (
+                    <span className="flex items-center gap-2">🌍 All Nations</span>
+                  ) : (
+                    <>
+                      <div className="w-5 flex items-center justify-center shrink-0">
+                        <CountryFlag code={trackNationFilter} />
+                      </div>
+                      <span className="truncate">{TRACK_NATIONS.find(n => n.code === trackNationFilter)?.name}</span>
+                    </>
+                  )}
+                </div>
+                <ChevronDown size={14} className={`shrink-0 text-gray-500 transform transition-transform ${isNationDropdownOpen ? 'rotate-180' : ''}`} />
+              </div>
+              
+              {isNationDropdownOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setIsNationDropdownOpen(false)}></div>
+                  <div className="absolute top-full mt-2 left-0 w-full max-h-[300px] overflow-y-auto bg-[#121318] border border-gray-800 rounded-md shadow-[0_15px_40px_rgba(0,0,0,0.9)] z-50 scrollbar-hide">
+                    <div 
+                      onClick={() => { setTrackNationFilter('All Nations'); setIsNationDropdownOpen(false); }} 
+                      className="p-3 hover:bg-[#3a86ff] hover:text-white cursor-pointer text-xs font-bold text-gray-300 border-b border-gray-800/50 transition-colors flex items-center gap-2"
+                    >
+                      🌍 All Nations
+                    </div>
+                    {TRACK_NATIONS.map(n => (
+                      <div 
+                        key={n.code} 
+                        onClick={() => { setTrackNationFilter(n.code); setIsNationDropdownOpen(false); }} 
+                        className="p-3 hover:bg-[#3a86ff] hover:text-white cursor-pointer flex items-center gap-3 border-b border-gray-800/30 last:border-0 transition-colors text-gray-300 group"
+                      >
+                        <div className="w-5 flex items-center justify-center shrink-0">
+                          <CountryFlag code={n.code} />
+                        </div>
+                        <span className="text-xs font-bold group-hover:text-white">{n.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
-          </>
+          </div>
         )}
       </div>
 
-      {/* COMPTEUR DE SESSIONS */}
+      {/* COMPTEUR DE SESSIONS HEADER */}
       {activeTab !== 'Tracks' && (
         <div className="px-6 py-3 bg-[#0a0a0f] border-b border-gray-800/50 flex items-center text-xs font-bold text-gray-400">
           <BarChart2 size={14} className="mr-2" /> 
-          0 sessions {activeTab === 'LapTimes' ? 'with lap times' : ''}
+          {stats.sessions} session{stats.sessions !== 1 ? 's' : ''}
         </div>
       )}
 
-      {/* ZONE DE CONTENU DYNAMIQUE */}
-      <div className="flex-1 overflow-y-auto p-6 bg-[#0a0a0f] scrollbar-hide">
+      {/* ============================================================== */}
+      {/* ZONE DE CONTENU DYNAMIQUE OVERALL ANALYTICS */}
+      {/* ============================================================== */}
+      <div className="flex-1 overflow-y-auto p-6 bg-[#0a0a0f] scrollbar-hide relative">
         
-        {/* === TAB 1 : OVERALL ANALYTICS === */}
+        {/* LOADING OVERLAY */}
+        {isLoading && (
+          <div className="absolute inset-0 bg-[#0a0a0f]/80 backdrop-blur-sm z-50 flex items-center justify-center">
+            <RefreshCw size={32} className="text-[#3a86ff] animate-spin" />
+          </div>
+        )}
+
         {activeTab === 'Overall' && (
-          <div className="flex flex-col gap-8 animate-in fade-in duration-300">
+          <div className="flex flex-col gap-8">
             
             {/* ----------------------------------------------------------------- */}
-            {/* VUE : PRACTICE (ou All Types)                                     */}
+            {/* VUE 1 : PRACTICE (ou All Types)                                   */}
             {/* ----------------------------------------------------------------- */}
             {(activeType === 'Practice' || activeType === 'All Types') && (
-              <>
+              <div className="animate-in fade-in duration-300 flex flex-col gap-8">
+                
+                {/* KPIs */}
                 <div className="grid grid-cols-3 gap-6">
                   <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-5 relative overflow-hidden flex flex-col justify-between h-32 shadow-lg">
                     <div className="flex justify-between items-start">
@@ -1974,212 +2662,310 @@ const AnalyticsView = () => {
                       <MapPin size={16} className="text-[#3a86ff]" />
                     </div>
                     <div>
-                      {/* VRAIE DATA DU COMPTE */}
-                      <div className="text-4xl font-black text-white italic">{playerStats.unique_tracks}</div>
+                      <div className="text-4xl font-black text-white italic">{stats?.tracksPracticed || 0}</div>
                       <div className="text-xs text-gray-500 mt-1">Unique circuits practiced on</div>
                     </div>
                   </div>
+                  
                   <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-5 relative overflow-hidden flex flex-col justify-between h-32 shadow-lg">
                     <div className="flex justify-between items-start">
                       <span className="text-[10px] font-bold tracking-widest text-gray-500 uppercase">Track/Car Combos</span>
                       <CarFront size={16} className="text-[#10b981]" />
                     </div>
                     <div>
-                      {/* VRAIE DATA DU COMPTE */}
-                      <div className="text-4xl font-black text-white italic">{playerStats.unique_combos}</div>
+                      <div className="text-4xl font-black text-white italic">{stats?.combos || 0}</div>
                       <div className="text-xs text-gray-500 mt-1">Unique track and car combinations</div>
                     </div>
                   </div>
+                  
                   <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-5 relative overflow-hidden flex flex-col justify-between h-32 shadow-lg">
                     <div className="flex justify-between items-start">
                       <span className="text-[10px] font-bold tracking-widest text-gray-500 uppercase">Total Sessions</span>
                       <PlayCircle size={16} className="text-[#0ea5e9]" />
                     </div>
                     <div>
-                      {/* VRAIE DATA DU COMPTE DYNAMIQUE SELON LE FILTRE */}
-                      <div className="text-4xl font-black text-white italic">
-                        {activeType === 'Practice' ? playerStats.practice_sessions : playerStats.total_sessions}
-                      </div>
-                      <div className="text-xs text-gray-500 mt-1">
-                        {activeType === 'Practice' ? 'Total practice sessions' : 'Total lifetime sessions'} recorded
-                      </div>
+                      <div className="text-4xl font-black text-white italic">{stats?.sessions || 0}</div>
+                      <div className="text-xs text-gray-500 mt-1">Practice sessions recorded</div>
                     </div>
                   </div>
                 </div>
 
-                <div>
-                  <h2 className="text-xl font-bold text-white">Track Performance</h2>
-                  <p className="text-sm text-gray-400 mb-4">Best laps and consistency across circuits for this category</p>
-                  <div className="bg-[#121318] border border-gray-800/50 rounded-xl overflow-hidden min-h-[250px] flex flex-col">
-                    <div className="grid grid-cols-4 p-4 border-b border-gray-800/50 text-[10px] font-bold tracking-widest text-gray-500 uppercase">
-                      <div className="col-span-1">Track</div>
-                      <div className="col-span-1 text-center">Sessions</div>
-                      <div className="col-span-1 text-center">Personal Best</div>
-                      <div className="col-span-1 text-right">Avg Lap Time</div>
-                    </div>
-                    <div className="flex-1 flex items-center justify-center text-sm font-medium text-gray-500">
-                      No practice data available yet.
+                {/* Tables Practice */}
+                <div className="flex flex-col gap-6">
+                  <div>
+                    <h2 className="text-lg font-bold text-white mb-1">Track Performance</h2>
+                    <p className="text-xs text-gray-400 mb-4">Best laps and consistency across circuits</p>
+                    <div className="bg-[#121318] border border-gray-800/50 rounded-xl overflow-hidden min-h-[250px] flex flex-col relative">
+                      
+                      {isLoading && (
+                        <div className="absolute inset-0 bg-[#121318]/80 backdrop-blur-sm z-10 flex items-center justify-center">
+                          <RefreshCw size={24} className="text-[#3a86ff] animate-spin" />
+                        </div>
+                      )}
+                      
+                      <div className="grid grid-cols-4 p-4 border-b border-gray-800/50 text-[10px] font-bold tracking-widest text-gray-500 uppercase">
+                        <div className="col-span-1">Track</div>
+                        <div className="col-span-1 text-center">Sessions</div>
+                        <div className="col-span-1 text-center">Personal Best</div>
+                        <div className="col-span-1 text-right">Avg Lap Time</div>
+                      </div>
+                      
+                      {stats?.trackPerformance && stats.trackPerformance.length > 0 ? (
+                        <div className="flex-1 overflow-y-auto">
+                          {stats.trackPerformance.map((row: any, i: number) => (
+                            <div key={i} className="grid grid-cols-4 p-4 border-b border-gray-800/30 hover:bg-[#1a1b26] transition-colors items-center text-sm font-bold">
+                              <div className="col-span-1 text-white flex items-center gap-2">
+                                <CountryFlag code={getTrackCountryCode(row.track || row.name)} /> 
+                                <span className="truncate">{row.track || row.name}</span>
+                              </div>
+                              <div className="col-span-1 text-center text-gray-400">{row.sessions}</div>
+                              <div className="col-span-1 text-center text-[#8338ec] font-mono">{row.bestLap}</div>
+                              <div className="col-span-1 text-right text-gray-300 font-mono">{row.avgLap || row.avgFinish}</div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="flex-1 flex items-center justify-center text-sm font-medium text-gray-500">
+                          No data available for these filters.
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
-              </>
+              </div>
             )}
 
             {/* ----------------------------------------------------------------- */}
-            {/* VUE : QUALIFYING                                                  */}
+            {/* VUE 2 : QUALIFYING (Basée sur ta capture d'écran Qualy)           */}
             {/* ----------------------------------------------------------------- */}
             {activeType === 'Qualifying' && (
-              <>
+              <div className="animate-in fade-in duration-300 flex flex-col gap-8">
+                {/* KPIs Qualy */}
                 <div className="grid grid-cols-4 gap-6">
                   {[
-                    { label: 'Total Sessions', sub: 'Online qualifying sessions', val: '0', icon: Flag, color: 'text-blue-400' },
-                    { label: 'Poles', sub: 'Pole positions earned', val: '0', icon: Trophy, color: 'text-green-400' },
-                    { label: 'Top 3', sub: 'Top-three starts', val: '0', icon: Shield, color: 'text-yellow-400' },
-                    { label: 'Top 5', sub: 'Top-five finishes', val: '0', icon: CheckCircle2, color: 'text-purple-400' }
+                    { label: 'Total Sessions', sub: 'Online qualifying sessions recorded', val: stats.sessions, icon: Flag, color: 'text-[#3a86ff]' },
+                    { label: 'Poles', sub: 'Pole positions earned', val: stats.poles, icon: Trophy, color: 'text-[#10b981]' },
+                    { label: 'Top 3', sub: 'Top-three starts', val: stats.top3Starts, icon: Trophy, color: 'text-[#e9c46a]' },
+                    { label: 'Top 5', sub: 'Top-five finishes', val: stats.top5, icon: Star, color: 'text-gray-400' }
                   ].map((kpi, i) => (
-                    <div key={i} className="bg-[#121318] border border-gray-800/50 rounded-xl p-5 relative overflow-hidden flex flex-col justify-between h-32 shadow-lg">
+                    <div key={i} className="bg-[#121318] border border-gray-800/50 rounded-xl p-5 flex flex-col justify-between h-32 shadow-lg">
                       <div className="flex justify-between items-start">
                         <span className="text-[10px] font-bold tracking-widest text-gray-500 uppercase">{kpi.label}</span>
                         <kpi.icon size={16} className={kpi.color} />
                       </div>
                       <div>
                         <div className="text-4xl font-black text-white italic">{kpi.val}</div>
-                        <div className="text-xs text-gray-500 mt-1">{kpi.sub} for this category</div>
+                        <div className="text-[10px] text-gray-500 mt-1">{kpi.sub}</div>
                       </div>
                     </div>
                   ))}
                 </div>
 
-                <div>
-                  <h2 className="text-xl font-bold text-white">Car Category Breakdown</h2>
-                  <p className="text-sm text-gray-400 mb-4">Performance for this category in qualifying sessions</p>
-                  <div className="bg-[#121318] border border-gray-800/50 rounded-xl overflow-hidden min-h-[150px] flex flex-col">
-                    <div className="grid grid-cols-5 p-4 border-b border-gray-800/50 text-[10px] font-bold tracking-widest text-gray-500 uppercase">
-                      <div>Category</div>
-                      <div className="text-center">Sessions</div>
-                      <div className="text-center">Poles</div>
-                      <div className="text-center">Top 3</div>
-                      <div className="text-right">Avg Position</div>
+                <div className="flex flex-col gap-6">
+                  <div>
+                    <h2 className="text-lg font-bold text-white mb-1">Car Category Breakdown</h2>
+                    <p className="text-xs text-gray-400 mb-4">Performance across endurance classes in qualifying sessions</p>
+                    <div className="bg-[#121318] border border-gray-800/50 rounded-xl overflow-hidden">
+                      <div className="grid grid-cols-5 p-4 border-b border-gray-800/50 text-[9px] font-black tracking-widest text-gray-500 uppercase">
+                        <div>Category</div>
+                        <div className="text-center">Sessions</div>
+                        <div className="text-center">Poles</div>
+                        <div className="text-center">Top 3</div>
+                        <div className="text-right">Avg Position</div>
+                      </div>
+                      {stats.categoryBreakdown && stats.categoryBreakdown.length > 0 ? stats.categoryBreakdown.map((row: any, i: number) => (
+                        <div key={i} className="grid grid-cols-5 p-4 border-b border-gray-800/30 text-sm font-bold items-center hover:bg-[#1a1b26] transition-colors last:border-0">
+                          <div><span className={`px-2 py-0.5 rounded text-[9px] font-black tracking-widest uppercase border ${getClassColor(row.category)}`}>{row.category.substring(0, 5)}</span></div>
+                          <div className="text-center text-gray-300">{row.sessions || row.races}</div>
+                          <div className="text-center text-[#10b981]">{row.poles || 0}</div>
+                          <div className="text-center text-[#e9c46a]">{row.top3Starts || 0}</div>
+                          <div className="text-right text-white">{row.avgQual?.toFixed(1) || '0.0'}</div>
+                        </div>
+                      )) : <div className="p-4 text-center text-gray-500 text-sm">No data available</div>}
                     </div>
-                    <div className="flex-1 flex items-center justify-center text-sm font-medium text-gray-500">No category data available</div>
                   </div>
-                </div>
 
-                <div>
-                  <h2 className="text-xl font-bold text-white">Best Laps by Circuit</h2>
-                  <p className="text-sm text-gray-400 mb-4">Your quickest recorded qualifying laps per track for this category</p>
-                  <div className="bg-[#121318] border border-gray-800/50 rounded-xl overflow-hidden min-h-[250px] flex items-center justify-center text-sm font-medium text-gray-500">
-                    No lap time data captured yet. Import more sessions with timing data.
+                  <div>
+                    <h2 className="text-lg font-bold text-white mb-1">Top Tracks by Performance</h2>
+                    <p className="text-xs text-gray-400 mb-4">Best performing tracks by average qualifying position</p>
+                    <div className="bg-[#121318] border border-gray-800/50 rounded-xl overflow-hidden">
+                      {stats.topTracks && stats.topTracks.length > 0 ? stats.topTracks.map((row: any, i: number) => (
+                        <div key={i} className="flex justify-between p-4 border-b border-gray-800/30 items-center hover:bg-[#1a1b26] transition-colors last:border-0">
+                          <div className="flex items-center gap-4">
+                            <span className="bg-[#1c1e2b] border border-gray-700 w-6 h-6 rounded flex items-center justify-center text-xs font-bold text-gray-400">{i+1}</span>
+                            <div className="flex flex-col">
+                              <span className="text-sm font-bold text-white flex items-center gap-2"><CountryFlag code={getTrackCountryCode(row.track)} /> {row.track}</span>
+                              <span className="text-[10px] text-gray-500 font-medium">{row.sessions} session</span>
+                            </div>
+                          </div>
+                          <div className="flex flex-col items-end">
+                            <span className="text-lg font-black text-white">{row.avgQual?.toFixed(1) || '0.0'} <ChevronRight size={14} className="inline text-gray-600"/></span>
+                            <span className="text-[10px] text-gray-500 font-medium">Avg Qual.</span>
+                          </div>
+                        </div>
+                      )) : <div className="p-4 text-center text-gray-500 text-sm">No data available</div>}
+                    </div>
+                  </div>
+
+                  <div>
+                    <h2 className="text-lg font-bold text-white mb-1">Track Proficiency</h2>
+                    <p className="text-xs text-gray-400 mb-4">Performance breakdown by circuit in qualifying sessions</p>
+                    <div className="bg-[#121318] border border-gray-800/50 rounded-xl overflow-hidden">
+                      <div className="grid grid-cols-3 p-4 border-b border-gray-800/50 text-[9px] font-black tracking-widest text-gray-500 uppercase">
+                        <div>Track</div>
+                        <div className="text-center">Sessions</div>
+                        <div className="text-right">Avg Qual.</div>
+                      </div>
+                      {stats.trackProficiency && stats.trackProficiency.length > 0 ? stats.trackProficiency.map((row: any, i: number) => (
+                        <div key={i} className="grid grid-cols-3 p-4 border-b border-gray-800/30 text-sm font-bold items-center hover:bg-[#1a1b26] transition-colors last:border-0">
+                          <div className="flex items-center gap-2"><CountryFlag code={getTrackCountryCode(row.track)} /> {row.track}</div>
+                          <div className="text-center text-gray-400">{row.sessions}</div>
+                          <div className="text-right text-white">{row.avgQual?.toFixed(1) || '0.0'}</div>
+                        </div>
+                      )) : <div className="p-4 text-center text-gray-500 text-sm">No data available</div>}
+                    </div>
                   </div>
                 </div>
-              </>
+              </div>
             )}
 
             {/* ----------------------------------------------------------------- */}
-            {/* VUE : RACES                                                       */}
+            {/* VUE 3 : RACES (Basée sur ta capture d'écran Races)                */}
             {/* ----------------------------------------------------------------- */}
             {activeType === 'Races' && (
-              <>
-                <div className="grid grid-cols-4 gap-6">
+              <div className="animate-in fade-in duration-300 flex flex-col gap-8">
+                {/* KPIs Race (8 blocs) */}
+                <div className="grid grid-cols-4 gap-4">
                   {[
-                    { label: 'Total Sessions', sub: 'Total race sessions recorded', val: '0', icon: Flag, color: 'text-blue-400' },
-                    { label: 'Average Finish', sub: 'Across all race sessions', val: '--', icon: Activity, color: 'text-gray-400' },
-                    { label: 'Wins', sub: 'Race wins', val: '0', icon: Trophy, color: 'text-green-400' },
-                    { label: 'Podiums', sub: 'Top-three finishes', val: '0', icon: Shield, color: 'text-yellow-400' },
-                    { label: 'Top 5', sub: 'Top-five finishes', val: '0', icon: CheckCircle2, color: 'text-purple-400' },
-                    { label: 'Fastest Laps', sub: 'Fastest laps set in races', val: '0', icon: Zap, color: 'text-red-400' },
-                    { label: 'Laps Led', sub: 'Total laps led in race sessions', val: '0', icon: Route, color: 'text-orange-400' },
-                    { label: 'Laps Completed', sub: 'Total laps completed in online races', val: '0', icon: PlayCircle, color: 'text-blue-400' }
+                    { label: 'Total Sessions', sub: 'Total race sessions recorded', val: stats.sessions, icon: Flag, color: 'text-[#3a86ff]' },
+                    { label: 'Average Finish', sub: 'Across all race sessions', val: stats.avgFinish?.toFixed(1) || '0.0', icon: Activity, color: 'text-gray-400' },
+                    { label: 'Wins', sub: 'Race victories', val: stats.wins, icon: Trophy, color: 'text-[#10b981]' },
+                    { label: 'Podiums', sub: 'Top-three finishes', val: stats.podiums, icon: Trophy, color: 'text-[#e9c46a]' },
+                    { label: 'Top 5', sub: 'Top-five finishes', val: stats.top5, icon: Star, color: 'text-gray-400' },
+                    { label: 'Fastest Laps', sub: 'Fastest laps set in races', val: stats.fastestLaps, icon: Zap, color: 'text-[#ef4444]' },
+                    { label: 'Laps Led', sub: 'Total laps led in online races', val: stats.lapsLed, icon: Route, color: 'text-orange-400' },
+                    { label: 'Laps Completed', sub: 'Total laps completed in online races', val: stats.lapsCompleted, icon: PlayCircle, color: 'text-[#3a86ff]' }
                   ].map((kpi, i) => (
-                    <div key={i} className="bg-[#121318] border border-gray-800/50 rounded-xl p-5 relative overflow-hidden flex flex-col justify-between h-32 shadow-lg">
+                    <div key={i} className="bg-[#121318] border border-gray-800/50 rounded-xl p-4 flex flex-col justify-between h-28 shadow-lg">
                       <div className="flex justify-between items-start">
-                        <span className="text-[10px] font-bold tracking-widest text-gray-500 uppercase">{kpi.label}</span>
-                        <kpi.icon size={16} className={kpi.color} />
+                        <span className="text-[9px] font-bold tracking-widest text-gray-500 uppercase">{kpi.label}</span>
+                        <kpi.icon size={14} className={kpi.color} />
                       </div>
                       <div>
-                        <div className="text-4xl font-black text-white italic">{kpi.val}</div>
-                        <div className="text-[10px] text-gray-500 mt-1">{kpi.sub} for this category</div>
+                        <div className="text-3xl font-black text-white italic">{kpi.val}</div>
+                        <div className="text-[9px] text-gray-500 mt-1">{kpi.sub}</div>
                       </div>
                     </div>
                   ))}
                 </div>
 
-                <div>
-                  <h2 className="text-xl font-bold text-white">Car Category Breakdown</h2>
-                  <p className="text-sm text-gray-400 mb-4">Performance for this category in race sessions</p>
-                  <div className="bg-[#121318] border border-gray-800/50 rounded-xl overflow-hidden min-h-[150px] flex flex-col">
-                    <div className="grid grid-cols-7 p-4 border-b border-gray-800/50 text-[10px] font-bold tracking-widest text-gray-500 uppercase">
-                      <div className="col-span-2">Category</div>
-                      <div className="text-center">Races</div>
-                      <div className="text-center">Wins</div>
-                      <div className="text-center">Podiums</div>
-                      <div className="text-center">Avg Qualy Pos</div>
-                      <div className="text-right">Avg Finish</div>
+                <div className="flex flex-col gap-6">
+                  <div>
+                    <h2 className="text-lg font-bold text-white mb-1">Car Category Breakdown</h2>
+                    <p className="text-xs text-gray-400 mb-4">Performance across endurance classes in race sessions</p>
+                    <div className="bg-[#121318] border border-gray-800/50 rounded-xl overflow-hidden">
+                      <div className="grid grid-cols-7 p-4 border-b border-gray-800/50 text-[9px] font-black tracking-widest text-gray-500 uppercase">
+                        <div className="col-span-1">Category</div>
+                        <div className="col-span-1 text-center">Races</div>
+                        <div className="col-span-1 text-center">Wins</div>
+                        <div className="col-span-1 text-center">Podiums</div>
+                        <div className="col-span-1 text-center">Avg Qualy Pos</div>
+                        <div className="col-span-1 text-center">Avg Finish</div>
+                        <div className="col-span-1 text-right">Avg G Position</div>
+                      </div>
+                      {stats.categoryBreakdown && stats.categoryBreakdown.length > 0 ? stats.categoryBreakdown.map((row: any, i: number) => (
+                        <div key={i} className="grid grid-cols-7 p-4 border-b border-gray-800/30 text-sm font-bold items-center hover:bg-[#1a1b26] transition-colors last:border-0">
+                          <div className="col-span-1"><span className={`px-2 py-0.5 rounded text-[9px] font-black tracking-widest uppercase border ${getClassColor(row.category)}`}>{row.category.substring(0, 5)}</span></div>
+                          <div className="col-span-1 text-center text-gray-300">{row.races}</div>
+                          <div className="col-span-1 text-center text-[#10b981]">{row.wins}</div>
+                          <div className="col-span-1 text-center text-[#e9c46a]">{row.podiums}</div>
+                          <div className="col-span-1 text-center text-white">{row.avgQual?.toFixed(1) || '0.0'}</div>
+                          <div className="col-span-1 text-center text-white">{row.avgFinish?.toFixed(1) || '0.0'}</div>
+                          <div className="col-span-1 text-right text-white">{row.avgPos?.toFixed(1) || '0.0'}</div>
+                        </div>
+                      )) : <div className="p-4 text-center text-gray-500 text-sm">No data available</div>}
                     </div>
-                    <div className="flex-1 flex items-center justify-center text-sm font-medium text-gray-500">No category data available</div>
                   </div>
-                </div>
 
-                <div className="grid grid-cols-2 gap-6">
-                  <div className="flex flex-col">
-                    <h2 className="text-xl font-bold text-white">Best Laps by Circuit</h2>
-                    <p className="text-sm text-gray-400 mb-4">Your quickest recorded race laps per track for this category</p>
-                    <div className="bg-[#121318] border border-gray-800/50 rounded-xl flex-1 flex items-center justify-center text-sm font-medium text-gray-500 min-h-[250px]">
-                      No lap time data captured yet. Import more sessions with timing data.
+                  {/* Grid pour "Top Tracks" et "Reliability" */}
+                  <div className="grid grid-cols-2 gap-6">
+                    <div>
+                      <h2 className="text-lg font-bold text-white mb-1">Top Tracks by Performance</h2>
+                      <p className="text-xs text-gray-400 mb-4">Best performing tracks by average finish position</p>
+                      <div className="bg-[#121318] border border-gray-800/50 rounded-xl overflow-hidden h-[240px]">
+                        {stats.topTracks && stats.topTracks.length > 0 ? stats.topTracks.map((row: any, i: number) => (
+                          <div key={i} className="flex justify-between p-4 border-b border-gray-800/30 items-center hover:bg-[#1a1b26] transition-colors last:border-0">
+                            <div className="flex items-center gap-4">
+                              <span className="bg-[#1c1e2b] border border-gray-700 w-6 h-6 rounded flex items-center justify-center text-xs font-bold text-gray-400">{i+1}</span>
+                              <div className="flex flex-col">
+                                <span className="text-sm font-bold text-white flex items-center gap-2"><CountryFlag code={getTrackCountryCode(row.track)} /> {row.track}</span>
+                                <span className="text-[10px] text-gray-500 font-medium">{row.sessions} session</span>
+                              </div>
+                            </div>
+                            <div className="flex flex-col items-end">
+                              <span className="text-lg font-black text-white">{row.avgFinish?.toFixed(1) || '0.0'} <ChevronRight size={14} className="inline text-gray-600"/></span>
+                              <span className="text-[10px] text-gray-500 font-medium">Avg Finish</span>
+                            </div>
+                          </div>
+                        )) : <div className="p-4 text-center text-gray-500 text-sm">No data available</div>}
+                      </div>
                     </div>
-                  </div>
 
-                  {/* Le module "Reliability Insights" disparaît si on est en mode Offline */}
-                  {activeMode !== 'Offline' && (
-                    <div className="flex flex-col">
-                      <h2 className="text-xl font-bold text-white">Reliability Insights</h2>
-                      <p className="text-sm text-gray-400 mb-4">Track your ability to bring the car home</p>
+                    <div>
+                      <h2 className="text-lg font-bold text-white mb-1">Reliability Insights</h2>
+                      <p className="text-xs text-gray-400 mb-4">Track your ability to bring the car home</p>
                       <div className="flex flex-col gap-4">
                         <div className="grid grid-cols-2 gap-4">
-                          <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-5 flex flex-col h-24">
+                          <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-5 flex flex-col h-[112px]">
                             <span className="text-[10px] font-bold tracking-widest text-gray-500 uppercase">DNF Indicator</span>
-                            <div className="text-2xl font-black text-white italic mt-auto">0</div>
+                            <div className="text-3xl font-black text-white italic mt-auto">{stats.dnfIndicator}</div>
                           </div>
-                          <div className="bg-[#2a1518] border border-[#ef4444]/20 rounded-xl p-5 flex flex-col h-24">
+                          <div className="bg-[#2a1518] border border-[#ef4444]/20 rounded-xl p-5 flex flex-col h-[112px]">
                             <span className="text-[10px] font-bold tracking-widest text-[#ef4444] uppercase">DNFs</span>
-                            <div className="text-2xl font-black text-[#ef4444] italic mt-auto">0</div>
+                            <div className="text-3xl font-black text-[#ef4444] italic mt-auto">{stats.dnfs}</div>
                           </div>
                         </div>
-                        <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-5 flex flex-col h-28">
+                        <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-5 flex flex-col h-[112px]">
                           <span className="text-[10px] font-bold tracking-widest text-gray-500 uppercase">DNF Rate</span>
-                          <div className="text-3xl font-black text-white italic mt-auto">--</div>
-                          <span className="text-[10px] text-gray-500 mt-1">Races in a row finishing without DNF</span>
+                          <div className="text-3xl font-black text-white italic mt-auto">{stats.dnfRate?.toFixed(1) || '0.0'}%</div>
+                          <span className="text-[10px] text-gray-500 mt-1">Percentage of multiplayer races ending as DNF</span>
                         </div>
                         <div className="grid grid-cols-2 gap-4">
-                          <div className="bg-[#12221b] border border-[#10b981]/20 rounded-xl p-5 flex flex-col h-28">
+                          <div className="bg-[#12221b] border border-[#10b981]/20 rounded-xl p-5 flex flex-col h-[112px]">
                             <span className="text-[10px] font-bold tracking-widest text-[#10b981] uppercase">Current Streak</span>
-                            <div className="text-3xl font-black text-[#10b981] italic mt-auto">0</div>
-                            <span className="text-[10px] text-[#10b981]/60 mt-1">Races since last DNF</span>
+                            <div className="text-3xl font-black text-[#10b981] italic mt-auto">{stats.currentStreak}</div>
+                            <span className="text-[9px] text-[#10b981]/60 mt-1">Races since last DNF</span>
                           </div>
-                          <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-5 flex flex-col h-28">
+                          <div className="bg-[#121318] border border-[#3a86ff]/20 rounded-xl p-5 flex flex-col h-[112px]">
                             <span className="text-[10px] font-bold tracking-widest text-[#3a86ff] uppercase">Highest Streak</span>
-                            <div className="text-3xl font-black text-[#3a86ff] italic mt-auto">0</div>
-                            <span className="text-[10px] text-gray-500 mt-1">All-time best streak</span>
+                            <div className="text-3xl font-black text-[#3a86ff] italic mt-auto">{stats.highestStreak}</div>
+                            <span className="text-[9px] text-gray-500 mt-1">All-time best streak</span>
                           </div>
                         </div>
                       </div>
                     </div>
-                  )}
-                </div>
+                  </div>
 
-                <div>
-                  <h2 className="text-xl font-bold text-white mt-2">Track Proficiency</h2>
-                  <p className="text-sm text-gray-400 mb-4">Performance breakdown by circuit for this category in race sessions</p>
-                  <div className="bg-[#121318] border border-gray-800/50 rounded-xl overflow-hidden min-h-[150px] flex flex-col">
-                    <div className="grid grid-cols-3 p-4 border-b border-gray-800/50 text-[10px] font-bold tracking-widest text-gray-500 uppercase">
-                      <div>Track</div>
-                      <div className="text-center">Sessions</div>
-                      <div className="text-right">Avg Finish</div>
+                  <div>
+                    <h2 className="text-lg font-bold text-white mb-1 mt-4">Track Proficiency</h2>
+                    <p className="text-xs text-gray-400 mb-4">Performance breakdown by circuit in race sessions</p>
+                    <div className="bg-[#121318] border border-gray-800/50 rounded-xl overflow-hidden">
+                      <div className="grid grid-cols-3 p-4 border-b border-gray-800/50 text-[9px] font-black tracking-widest text-gray-500 uppercase">
+                        <div>Track</div>
+                        <div className="text-center">Sessions</div>
+                        <div className="text-right">Avg Finish</div>
+                      </div>
+                      {stats.trackProficiency && stats.trackProficiency.length > 0 ? stats.trackProficiency.map((row: any, i: number) => (
+                        <div key={i} className="grid grid-cols-3 p-4 border-b border-gray-800/30 text-sm font-bold items-center hover:bg-[#1a1b26] transition-colors last:border-0">
+                          <div className="flex items-center gap-2"><CountryFlag code={getTrackCountryCode(row.track)} /> {row.track}</div>
+                          <div className="text-center text-gray-400">{row.sessions}</div>
+                          <div className="text-right text-white">{row.avgFinish?.toFixed(1) || '0.0'}</div>
+                        </div>
+                      )) : <div className="p-4 text-center text-gray-500 text-sm">No data available</div>}
                     </div>
-                    <div className="flex-1 flex items-center justify-center text-sm font-medium text-gray-500">No race sessions recorded yet. Import race data to populate track analytics.</div>
                   </div>
                 </div>
-              </>
+              </div>
             )}
 
           </div>
@@ -2248,23 +3034,325 @@ const AnalyticsView = () => {
 
         {/* === TAB 3 : LAP TIMES === */}
         {activeTab === 'LapTimes' && (
-          <div className="flex-1 bg-[#121318] border border-gray-800/50 rounded-xl flex flex-col items-center justify-center min-h-[500px]">
-            <Timer size={32} className="text-gray-600 mb-4" />
-            <h3 className="text-lg font-bold text-white mb-1">No lap time data</h3>
-            <p className="text-sm text-gray-400">Upload sessions with recorded lap times to explore your pace.</p>
+          <div className="animate-in fade-in duration-300 flex flex-col gap-6 pb-10">
+            <p className="text-xs text-gray-400">Lap times are shown per track — race, qualifying, and practice across online and offline modes.</p>
+            
+            {/* Legend */}
+            <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-4 shadow-lg">
+              <span className="text-gray-400 text-[10px] font-bold uppercase tracking-widest block mb-3">Reference data from Ohne Speed's LMU Laptimes Spreadsheet <ArrowUpRight size={10} className="inline"/></span>
+              <div className="grid grid-cols-3 gap-y-2 text-xs font-bold">
+                <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-[#3a86ff]"></div><span className="text-[#3a86ff]">Alien</span><span className="text-gray-500 font-medium">{"<"}100.5%</span></div>
+                <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-[#3a86ff] opacity-60"></div><span className="text-[#3a86ff] opacity-80">Competitive</span><span className="text-gray-500 font-medium">100.5-101.5%</span></div>
+                <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-[#10b981]"></div><span className="text-[#10b981]">Good</span><span className="text-gray-500 font-medium">101.5-103.5%</span></div>
+                <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-[#e9c46a]"></div><span className="text-[#e9c46a]">Midpack</span><span className="text-gray-500 font-medium">103.5-105.5%</span></div>
+                <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-[#f59e0b]"></div><span className="text-[#f59e0b]">Tail-ender</span><span className="text-gray-500 font-medium">105.5-106.5%</span></div>
+                <div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-[#ef4444]"></div><span className="text-[#ef4444]">Offline</span><span className="text-gray-500 font-medium">{"≥"}106.5%</span></div>
+              </div>
+            </div>
+
+            {/* KPIs */}
+            <div className="grid grid-cols-4 gap-4">
+              <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-4 flex flex-col justify-between h-24 shadow-lg">
+                <span className="text-[9px] font-bold tracking-widest text-gray-500 uppercase">Sessions with lap times</span>
+                <div className="text-3xl font-black text-white italic">{stats.lapTimesData.totalValid}</div>
+              </div>
+              <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-4 flex flex-col justify-between h-24 shadow-lg">
+                <span className="text-[9px] font-bold tracking-widest text-gray-500 uppercase">Tracks with lap times</span>
+                <div className="text-3xl font-black text-white italic">{stats.lapTimesData.totalTracks}</div>
+              </div>
+              <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-4 flex flex-col justify-between h-24 shadow-lg">
+                <span className="text-[9px] font-bold tracking-widest text-gray-500 uppercase mb-2">Sessions by type</span>
+                <div className="flex justify-between items-center text-xs font-bold text-gray-300"><span className="text-gray-400">Race</span><span>{stats.lapTimesData.byType.race}</span></div>
+                <div className="flex justify-between items-center text-xs font-bold text-gray-300"><span className="text-gray-400">Qualifying</span><span>{stats.lapTimesData.byType.qualy}</span></div>
+              </div>
+              <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-4 flex flex-col justify-between h-24 shadow-lg">
+                <span className="text-[9px] font-bold tracking-widest text-gray-500 uppercase mb-2">By session mode</span>
+                <div className="flex justify-between items-center text-xs font-bold text-gray-300"><span className="text-gray-400">Online</span><span>{stats.lapTimesData.byMode.online}</span></div>
+                <div className="flex justify-between items-center text-xs font-bold text-gray-300"><span className="text-gray-400">Offline</span><span>{stats.lapTimesData.byMode.offline}</span></div>
+              </div>
+            </div>
+
+            {/* Lap Times by Category */}
+            <div>
+              <h2 className="text-lg font-bold text-white mb-1">Lap Times by Category</h2>
+              <p className="text-xs text-gray-400 mb-4">Session volume and average reference pace per car class.</p>
+              <div className="bg-[#121318] border border-gray-800/50 rounded-xl overflow-hidden">
+                <div className="grid grid-cols-4 p-4 border-b border-gray-800/50 text-[9px] font-black tracking-widest text-gray-500 uppercase">
+                  <div>Category</div>
+                  <div className="text-center">Sessions</div>
+                  <div className="text-center">Tracks</div>
+                  <div className="text-right">Avg % vs Reference</div>
+                </div>
+                {stats.lapTimesData.byCategory.map((row: any, i: number) => (
+                  <div key={i} className="grid grid-cols-4 p-4 border-b border-gray-800/30 text-sm font-bold items-center hover:bg-[#1a1b26] transition-colors last:border-0">
+                    <div><span className={`px-2 py-0.5 rounded text-[9px] font-black tracking-widest uppercase border ${getClassColor(row.category)}`}>{row.category}</span></div>
+                    <div className="text-center text-gray-300">{row.sessions}</div>
+                    <div className="text-center text-gray-300">{row.tracks}</div>
+                    <div className="text-right text-[#10b981]">{row.avgRef}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Lap Times by Track (Expandable Graph) */}
+            <div>
+              <h2 className="text-lg font-bold text-white mb-1">Lap Times by Track</h2>
+              <p className="text-xs text-gray-400 mb-4">Expand a row to see lap time evolution and consistency stats.</p>
+              <div className="bg-[#121318] border border-gray-800/50 rounded-xl overflow-hidden flex flex-col">
+                <div className="grid grid-cols-9 p-4 border-b border-gray-800/50 text-[9px] font-black tracking-widest text-gray-500 uppercase">
+                  <div className="col-span-2">Track</div>
+                  <div className="text-center">Races</div>
+                  <div className="text-center">Qualifying</div>
+                  <div className="text-center">Practice</div>
+                  <div className="text-center">Online Best</div>
+                  <div className="text-center">Offline Best</div>
+                  <div className="text-center">Offline Δ</div>
+                  <div className="text-center">Overall Best</div>
+                  <div className="text-right">Sessions</div>
+                </div>
+                {stats.lapTimesData.byTrack.map((row: any, i: number) => {
+                  const isExpanded = expandedTrack === row.track;
+                  // Préparation des données du Graphique
+                  const chartData = row.sessionList.map((s: any) => {
+                    const timeToSecs = (t: string) => { if (!t || t === '--:--.---') return null; const [m, sec] = t.split(':'); return parseInt(m) * 60 + parseFloat(sec); };
+                    return {
+                      date: s.date,
+                      qualifying: s.type.toUpperCase().includes('QUALIFY') ? timeToSecs(s.best) : null,
+                      race: s.type.toUpperCase().includes('RACE') ? timeToSecs(s.best) : null,
+                      car: s.car,
+                      mode: s.mode,
+                      rawTime: s.best
+                    };
+                  });
+
+                  return (
+                    <div key={i} className="flex flex-col border-b border-gray-800/30 last:border-0">
+                      <div onClick={() => setExpandedTrack(isExpanded ? null : row.track)} className="grid grid-cols-9 p-4 text-sm font-bold items-center hover:bg-[#1a1b26] cursor-pointer transition-colors">
+                        <div className="col-span-2 flex items-center gap-2 text-white"><ChevronRight size={14} className={`text-gray-500 transition-transform ${isExpanded ? 'rotate-90' : ''}`}/><CountryFlag code={getTrackCountryCode(row.track)} /> <span className="truncate">{row.track}</span></div>
+                        <div className="text-center text-gray-200 font-mono">{row.races}</div>
+                        <div className="text-center text-gray-200 font-mono">{row.qualy}</div>
+                        <div className="text-center text-gray-500 font-mono">{row.practice}</div>
+                        <div className="text-center text-gray-200 font-mono">{row.onlineBest}</div>
+                        <div className="text-center text-gray-500 font-mono">{row.offlineBest}</div>
+                        <div className="text-center text-gray-500 font-mono">{row.offlineDelta}</div>
+                        <div className="text-center text-white font-mono">{row.overallBest}</div>
+                        <div className="text-right text-gray-400">{row.sessions}</div>
+                      </div>
+                      
+                      {/* LE GRAPHIQUE DÉROULANT MYLMU */}
+                      {isExpanded && (
+                        <div className="bg-[#0f1015] p-6 border-t border-gray-800/30 shadow-inner flex flex-col gap-6">
+                          <div className="flex items-center gap-3 text-[10px] font-bold tracking-widest text-gray-500 uppercase">
+                            Dot color = session mode <span className="flex items-center gap-1 text-gray-300"><div className="w-2 h-2 rounded-full bg-[#3a86ff]"></div> Online</span> <span className="flex items-center gap-1 text-gray-300"><div className="w-2 h-2 rounded-full bg-[#f59e0b]"></div> Offline</span>
+                          </div>
+                          <div className="h-[250px] w-full">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <RechartsLine data={chartData} margin={{ top: 10, right: 30, left: 10, bottom: 20 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
+                                <XAxis dataKey="date" stroke="#4b5563" tick={{fill: '#6b7280', fontSize: 10}} tickLine={false} axisLine={false} />
+                                <YAxis domain={['auto', 'auto']} stroke="#4b5563" tick={{fill: '#6b7280', fontSize: 10}} tickLine={false} axisLine={false} tickFormatter={(v) => { const m=Math.floor(v/60); const s=(v%60).toFixed(3); return `${m}:${s.padStart(6,'0')}`; }} />
+                                <RechartsTooltip 
+                                  content={({ active, payload }: any) => {
+                                    if (active && payload && payload.length) {
+                                      const pData = payload[0].payload;
+                                      return (
+                                        <div className="bg-[#121318]/95 backdrop-blur-md border border-gray-700 rounded-xl p-3 shadow-[0_10px_40px_rgba(0,0,0,0.8)] z-50 min-w-[200px]">
+                                          <div className="text-gray-400 text-[10px] font-bold mb-2">{pData.date}</div>
+                                          <div className="flex items-center gap-2 text-white font-bold text-sm mb-3"><CarFront size={14} className="text-gray-500"/> {pData.car}</div>
+                                          <div className="flex flex-col gap-1 text-xs">
+                                            {pData.race && <div className="text-gray-300">Races</div>}
+                                            {pData.qualifying && <div className="text-gray-300">Qualifying</div>}
+                                            <div className="text-gray-400">Lap Time: <span className="text-white font-mono font-bold ml-1">{pData.rawTime}</span></div>
+                                            <div className="text-gray-400">{pData.mode}</div>
+                                          </div>
+                                        </div>
+                                      );
+                                    }
+                                    return null;
+                                  }} 
+                                  cursor={{ stroke: '#4a4d65', strokeWidth: 1, strokeDasharray: '3 3' }} 
+                                />
+                                <Line type="monotone" dataKey="qualifying" name="Qualifying" stroke="#8338ec" strokeWidth={2} connectNulls dot={{ r: 4, strokeWidth: 2, fill: '#121318' }} activeDot={{ r: 6 }} />
+                                <Line type="monotone" dataKey="race" name="Races" stroke="#ef4444" strokeWidth={2} connectNulls dot={{ r: 4, strokeWidth: 2, fill: '#121318' }} activeDot={{ r: 6 }} />
+                              </RechartsLine>
+                            </ResponsiveContainer>
+                          </div>
+                          
+                          {/* Stats sous le graph */}
+                          <div className="grid grid-cols-4 pt-4 border-t border-gray-800/50">
+                            <div className="flex flex-col"><span className="text-[10px] font-bold tracking-widest text-gray-500 uppercase mb-1">Personal Best</span><span className="text-base font-black text-white font-mono">{row.overallBest}</span></div>
+                            <div className="flex flex-col"><span className="text-[10px] font-bold tracking-widest text-gray-500 uppercase mb-1">Average Lap</span><span className="text-base font-black text-white font-mono">{row.calculatedAvgLap}</span></div>
+                            <div className="flex flex-col"><span className="text-[10px] font-bold tracking-widest text-gray-500 uppercase mb-1">Std Dev</span><span className="text-base font-black text-white font-mono">{row.calculatedStdDev}</span></div>
+                            <div className="flex flex-col"><span className="text-[10px] font-bold tracking-widest text-gray-500 uppercase mb-1">Within 0.5s of PB</span><span className="text-base font-black text-white font-mono">{row.calculatedConsistency}</span></div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* All Sessions (Cliquables vers SessionDetailView) */}
+            <div>
+              <h2 className="text-lg font-bold text-white mb-1">All Sessions</h2>
+              <p className="text-xs text-gray-400 mb-4">Every session with a recorded best lap, newest first.</p>
+              <div className="bg-[#121318] border border-gray-800/50 rounded-xl overflow-hidden">
+                <div className="grid grid-cols-6 p-4 border-b border-gray-800/50 text-[9px] font-black tracking-widest text-gray-500 uppercase">
+                  <div>Date</div>
+                  <div>Track</div>
+                  <div>Type</div>
+                  <div>Mode</div>
+                  <div>Car</div>
+                  <div className="text-right">Lap Time</div>
+                </div>
+                {stats.lapTimesData.allSessions.map((row: any, i: number) => (
+                  <div 
+                    key={i} 
+                    onClick={() => {
+                      if (setActiveMenu && setSelectedHistorySession) {
+                        setSelectedHistorySession(row);
+                        setActiveMenu('Sessions');
+                      }
+                    }} 
+                    className="grid grid-cols-6 p-4 border-b border-gray-800/30 text-sm font-bold items-center hover:bg-[#1a1b26] cursor-pointer transition-colors last:border-0"
+                  >
+                    <div className="text-gray-400">{row.date}</div>
+                    <div className="text-white flex items-center gap-2"><CountryFlag code={getTrackCountryCode(row.track)} /> <span className="truncate">{row.track}</span></div>
+                    <div className="text-gray-300">{row.type}</div>
+                    <div className="text-gray-400">{row.mode}</div>
+                    <div className="text-gray-200 flex items-center gap-2"><CarFront size={14} className="text-gray-600 truncate"/>{row.car}</div>
+                    <div className="text-right text-white font-mono">{row.best}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
           </div>
         )}
 
         {/* === TAB 4 : TRACKS === */}
         {activeTab === 'Tracks' && (
-          <div className="grid grid-cols-3 gap-4">
-            {LMU_ALL_TRACKS.map(t => (
-              <div key={t.name} className="bg-[#121318] border border-gray-800/50 rounded-xl p-4 flex items-center justify-between hover:border-gray-700 transition-colors">
-                <span className="text-sm font-bold text-gray-200 flex items-center gap-2">
-                  <span className="text-base">{t.flag}</span> {t.name}
-                </span>
-              </div>
-            ))}
+          <div className="flex flex-col gap-6 animate-in fade-in duration-300 pb-10">
+            <div className="mb-2">
+              <h2 className="text-xl font-black text-white">Track Database</h2>
+              <p className="text-sm text-gray-400">Explore your session history across all available circuits</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {LMU_ALL_TRACKS.filter(t => trackNationFilter === 'All Nations' || getTrackCountryCode(t.name) === trackNationFilter).map((t, i) => {
+                const trkDetails = getTrackDetails(t.name);
+                const isExpanded = expandedTrack === t.name;
+                
+                // On récupère dynamiquement toutes les sessions roulées sur CE circuit
+                const trackSessions = stats?.lapTimesData?.allSessions?.filter((s: any) => s.track === t.name) || [];
+
+                return (
+                  <div 
+                    key={i} 
+                    className={`bg-[#121318] border border-gray-800/50 rounded-xl overflow-hidden transition-all duration-200 ${
+                      isExpanded 
+                        ? 'col-span-1 md:col-span-2 lg:col-span-3 border-gray-600 shadow-[0_0_30px_rgba(58,134,255,0.1)]' 
+                        : 'hover:border-gray-700 hover:bg-[#1a1b26]'
+                    }`}
+                  >
+                    {/* EN-TÊTE DE LA CARTE CIRCUIT */}
+                    <div 
+                      onClick={() => setExpandedTrack(isExpanded ? null : t.name)}
+                      className="p-5 flex items-center justify-between cursor-pointer"
+                    >
+                      <div className="flex items-center gap-4">
+                        {/* Miniature SVG du tracé */}
+                        <div className="w-16 h-12 bg-[#1c1e2b] rounded-lg border border-gray-800 flex items-center justify-center shrink-0 p-1">
+                          <img 
+                            src={trkDetails.images.LAYOUT} 
+                            alt={t.name} 
+                            className="max-w-full max-h-full object-contain opacity-80"
+                            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                          />
+                        </div>
+                        {/* Infos Circuit */}
+                        <div className="flex flex-col">
+                          <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                            <CountryFlag code={getTrackCountryCode(t.name)} />
+                            {t.name}
+                          </h3>
+                          <span className="text-[9px] text-gray-500 uppercase tracking-widest mt-1">{trkDetails.location}</span>
+                        </div>
+                      </div>
+                      
+                      {/* Compteur de sessions à droite */}
+                      <div className="flex items-center gap-6">
+                        <div className="text-right hidden sm:block">
+                          <span className="text-lg font-black text-white">{trackSessions.length}</span>
+                          <span className="block text-[9px] text-gray-500 uppercase tracking-widest">Sessions</span>
+                        </div>
+                        <ChevronDown size={20} className={`text-gray-500 transition-transform duration-300 ${isExpanded ? 'rotate-180 text-white' : ''}`} />
+                      </div>
+                    </div>
+
+                    {/* CONTENU DÉROULANT : HISTORIQUE DES SESSIONS */}
+                    {isExpanded && (
+                      <div className="border-t border-gray-800/50 bg-[#0f1015]">
+                        {trackSessions.length > 0 ? (
+                          <div className="flex flex-col">
+                            {/* En-têtes du tableau */}
+                            <div className="grid grid-cols-6 p-4 border-b border-gray-800/50 text-[9px] font-black tracking-widest text-gray-500 uppercase bg-[#0a0a0f]">
+                              <div className="pl-2">Date</div>
+                              <div>Type</div>
+                              <div>Mode</div>
+                              <div>Car</div>
+                              <div className="text-center">Laps</div>
+                              <div className="text-right pr-2">Best Lap</div>
+                            </div>
+                            
+                            {/* Liste des sessions cliquables */}
+                            <div className="max-h-[300px] overflow-y-auto scrollbar-hide">
+                              {trackSessions.map((session: any, idx: number) => (
+                                <div 
+                                  key={idx}
+                                  onClick={(e) => {
+                                    e.stopPropagation(); // Évite de refermer la carte circuit
+                                    // Redirection vers Analytics > Vue détaillée (comme l'onglet All Sessions)
+                                    if (setActiveMenu && setSelectedHistorySession) {
+                                      setSelectedHistorySession(session);
+                                      setActiveMenu('Sessions');
+                                    }
+                                  }}
+                                  className="grid grid-cols-6 p-4 border-b border-gray-800/30 text-sm font-bold items-center hover:bg-[#1c1e2b] cursor-pointer transition-colors last:border-0 group"
+                                >
+                                  <div className="text-gray-400 text-xs pl-2 group-hover:text-white transition-colors">{session.date}</div>
+                                  <div>
+                                    <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-widest border ${session.type?.toUpperCase().includes('RACE') ? 'bg-red-900/20 text-red-500 border-red-800/50' : 'bg-green-900/20 text-green-500 border-green-800/50'}`}>
+                                      {session.type}
+                                    </span>
+                                  </div>
+                                  <div className="text-gray-400 text-xs">{session.mode}</div>
+                                  <div className="text-gray-200 text-xs flex items-center gap-2">
+                                    <CarFront size={14} className="text-gray-600 shrink-0"/>
+                                    <span className="truncate pr-4">{session.car}</span>
+                                  </div>
+                                  <div className="text-center text-gray-400 font-mono">{session.laps}</div>
+                                  <div className="text-right text-white font-mono pr-2 flex items-center justify-end gap-3">
+                                    {session.best}
+                                    <ChevronRight size={14} className="text-gray-600 group-hover:text-white transition-colors opacity-0 group-hover:opacity-100" />
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="p-12 flex flex-col items-center justify-center opacity-40">
+                            <MapPin size={32} className="text-gray-500 mb-3" />
+                            <span className="text-xs font-bold tracking-widest text-gray-400 uppercase">No sessions recorded on this track yet</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 
@@ -4150,7 +5238,10 @@ export default function App() {
             ) : activeMenu === 'Schedule' ? (
               <ScheduleView />
             ) : activeMenu === 'Analytics' ? (
-              <AnalyticsView />
+              <AnalyticsView 
+                setActiveMenu={setActiveMenu} 
+                setSelectedHistorySession={setSelectedHistorySession} 
+              />
             ) : activeMenu === 'Sessions' ? (
               selectedHistorySession ? (
                 <SessionDetailView 

@@ -2,6 +2,7 @@ import time
 import mmap
 import ctypes
 import threading
+import math
 
 # ==============================================================================
 # ALIGNEMENT STRICT AVEC rF2 / LMU InternalsPlugin.hpp (Version 08)
@@ -168,7 +169,6 @@ class rF2TelemetryArray(ctypes.Structure):
         ("mVehicles", TelemInfoV01 * 128)
     ]
 
-# CORRECTION CRITIQUE : Alignement exact sur VehicleScoringInfoV01
 class rF2VehicleScoring(ctypes.Structure):
     _pack_ = 4
     _fields_ = [
@@ -231,7 +231,6 @@ class rF2VehicleScoring(ctypes.Structure):
         ("mExpansion", ctypes.c_uint8 * 4)
     ]
 
-# Mapping de la structure de base Scoring gérée par le plugin Shared Memory
 class rF2ScoringInfo(ctypes.Structure):
     _pack_ = 4
     _fields_ = [
@@ -241,7 +240,7 @@ class rF2ScoringInfo(ctypes.Structure):
         ("mEndET", ctypes.c_double),
         ("mMaxLaps", ctypes.c_int32),
         ("mLapDist", ctypes.c_double),
-        ("mResultsStream", ctypes.c_uint8 * 8), # Ignoré (Pointeur interne)
+        ("mResultsStream", ctypes.c_uint8 * 8), 
         ("mNumVehicles", ctypes.c_int32),
         ("mGamePhase", ctypes.c_uint8),
         ("mYellowFlagState", ctypes.c_int8),
@@ -278,7 +277,7 @@ class rF2ScoringInfo(ctypes.Structure):
     ]
 
 # ==============================================================================
-# LE THREAD DE LECTURE (SÉCURISÉ ANTI-CHEAT)
+# LE THREAD DE LECTURE
 # ==============================================================================
 
 class LiveTelemetryThread(threading.Thread):
@@ -291,16 +290,12 @@ class LiveTelemetryThread(threading.Thread):
 
     def _connect_to_lmu_memory(self):
         try:
-            # 1. On tente d'abord le plugin rF2 classique (Si installé via SimHub/CrewChief)
             self.telemetry_mmap = mmap.mmap(0, ctypes.sizeof(rF2TelemetryArray), "$rFactor2SMMP_Telemetry$", access=mmap.ACCESS_READ)
             self.scoring_mmap = mmap.mmap(0, ctypes.sizeof(rF2ScoringInfo), "$rFactor2SMMP_Scoring$", access=mmap.ACCESS_READ)
             return True
         except FileNotFoundError:
             try:
-                # 2. S'il n'est pas là, on utilise la nouvelle mémoire native LMU (LMU_Data)
                 self.telemetry_mmap = mmap.mmap(0, 65536, "LMU_Data", access=mmap.ACCESS_READ)
-                # Note: La structure LMU_Data globale nécessite un mapping différent, 
-                # on garde cette connexion en fallback prêt pour notre future évolution.
                 return True
             except FileNotFoundError:
                 return False
@@ -328,7 +323,6 @@ class LiveTelemetryThread(threading.Thread):
                 my_score = None
                 competitors = []
                 
-                # 2. Extraction du Live Timing (Scoring)
                 for i in range(scoring_data.mNumVehicles):
                     score_car = scoring_data.mVehicles[i]
                     if score_car.mIsPlayer:
@@ -346,23 +340,38 @@ class LiveTelemetryThread(threading.Thread):
                             'pos_z': score_car.mPos.z  
                         })
 
-                # 3. Extraction de la Physique (Telemetry)
                 for i in range(telemetry_array.mNumVehicles):
                     phys_car = telemetry_array.mVehicles[i]
                     if phys_car.mIsPlayer == 1:
                         my_phys = phys_car
                         break
 
-                # 4. Packaging global E-Sport
                 if my_phys and my_score:
+                    # Calcul du vent réel
+                    wind_speed = math.sqrt(scoring_data.mWind.x**2 + scoring_data.mWind.y**2 + scoring_data.mWind.z**2)
+                    
+                    # Le vrai calcul des dégâts globaux aéro (Moyenne des 8 panneaux de carrosserie)
+                    aero_damage = sum(my_phys.mDentSeverity) / 8.0
+                    
+                    # Vérifier si une roue est arrachée
+                    wheels_detached = int(my_phys.mDetached) + sum([w.mDetached for w in my_phys.mWheel])
+
                     live_data = {
+                        # --- ENVIRONNEMENT ---
                         'Time': scoring_data.mCurrentET, 
                         'TrackTemp': scoring_data.mTrackTemp,
+                        'AmbientTemp': scoring_data.mAmbientTemp,
                         'RainIntensity': scoring_data.mRaining, 
-                        'YellowFlag': scoring_data.mYellowFlagState,
-                        'BlueFlag': scoring_data.mBlueFlag,
-                        'Penalties': my_score.mNumPenalties, 
+                        'Minimum Path Wetness': scoring_data.mMinPathWetness, 
+                        'OffpathWetness': scoring_data.mMaxPathWetness, 
+                        'WindSpeed': wind_speed,
                         
+                        # --- GESTION COURSE ---
+                        'YellowFlag': scoring_data.mYellowFlagState,
+                        'Penalties': my_score.mNumPenalties, 
+                        'In Pits': my_score.mInPits,
+                        
+                        # --- IDENTIFICATION ---
                         'MyPosition': my_score.mPlace, 
                         'MyLapDist': my_score.mLapDist,
                         'MyLastLap': my_score.mLastLapTime,
@@ -370,33 +379,52 @@ class LiveTelemetryThread(threading.Thread):
                         'MyPosX': my_score.mPos.x,
                         'MyPosZ': my_score.mPos.z,
                         
-                        'Speed': my_phys.mEngineRPM * 0.03, 
+                        # --- INPUTS PILOTE ---
+                        'Speed': math.sqrt(my_phys.mLocalVel.x**2 + my_phys.mLocalVel.y**2 + my_phys.mLocalVel.z**2) * 3.6,
                         'Throttle': my_phys.mUnfilteredThrottle * 100.0,
                         'FilteredThrottle': my_phys.mFilteredThrottle * 100.0, 
                         'Brake': my_phys.mUnfilteredBrake * 100.0,
                         'FilteredBrake': my_phys.mFilteredBrake * 100.0, 
-                        'Steering': my_phys.mSteeringWheelAngle * 57.2958,
+                        'Steering': my_phys.mUnfilteredSteering * 57.2958,
+                        'Clutch': my_phys.mUnfilteredClutch * 100.0,
                         
+                        # --- ELECTRONIQUE ---
+                        'ABS_Active': my_phys.mABSActive,
+                        'TC_Active': my_phys.mTCActive,
+                        'Speed Limiter': my_phys.mSpeedLimiter,
+                        'BrakeBias': my_phys.mRearBrakeBias * 100.0,
+                        
+                        # --- AÉRO ET CHÂSSIS ---
                         'FrontDownforceN': my_phys.mFrontDownforce,
                         'RearDownforceN': my_phys.mRearDownforce,
                         'DragN': my_phys.mDrag,
+                        'Front3rdDeflection': my_phys.mFront3rdDeflection,
+                        'Rear3rdDeflection': my_phys.mRear3rdDeflection,
+                        'SteeringTorque': my_phys.mSteeringShaftTorque,
+                        
+                        'GForceLat': my_phys.mGForce[0],
+                        'GForceVert': my_phys.mGForce[1], # L'accélération verticale pour les sauts !
+                        'GForceLon': my_phys.mGForce[2],
+                        
+                        # --- MOTEUR ET ÉNERGIE ---
                         'Gear': my_phys.mGear, 
                         'FuelLevel': my_phys.mFuel, 
                         'VirtualEnergy': my_phys.mVirtualEnergy * 100.0, 
                         'SoC': my_phys.mSoC * 100.0,                     
-                        'BatteryCharge': my_phys.mBatteryChargeFraction * 100.0,
                         'EngineWaterTemp': my_phys.mEngineWaterTemp,
-                        'TireCarcassFL': my_phys.mWheel[0].mTireCarcassTemperature - 273.15, # Kelvin to Celcius
-                        'TireCarcassFR': my_phys.mWheel[1].mTireCarcassTemperature - 273.15,
-                        'TireCarcassRL': my_phys.mWheel[2].mTireCarcassTemperature - 273.15,
-                        'TireCarcassRR': my_phys.mWheel[3].mTireCarcassTemperature - 273.15,
-                        'EngineDamage': my_phys.mEngineDamage,
-                        'AeroDamage': my_phys.mAeroDamage,
-                        'BrakeBias': my_phys.mRearBrakeBias * 100.0,
+                        'EngineOilTemp': my_phys.mEngineOilTemp,
+                        
+                        # --- DÉGÂTS ---
+                        'EngineDamage': my_phys.mOverheating,
+                        'AeroDamage': aero_damage,
+                        'WheelsDetached': wheels_detached,
 
-                        'GForceLat': my_phys.mGForce[0],
-                        'GForceLon': my_phys.mGForce[2],
-
+                        # --- ROUES ET FREINS (Les 4 coins extraits) ---
+                        'RideHeightFL': my_phys.mWheel[0].mRideHeight,
+                        'RideHeightFR': my_phys.mWheel[1].mRideHeight,
+                        'RideHeightRL': my_phys.mWheel[2].mRideHeight,
+                        'RideHeightRR': my_phys.mWheel[3].mRideHeight,
+                        
                         'TirePressFL': my_phys.mWheel[0].mPressure,
                         'TirePressFR': my_phys.mWheel[1].mPressure,
                         'TirePressRL': my_phys.mWheel[2].mPressure,
@@ -406,19 +434,8 @@ class LiveTelemetryThread(threading.Thread):
                         'BrakeTempFR': my_phys.mWheel[1].mBrakeTemp,
                         'BrakeTempRL': my_phys.mWheel[2].mBrakeTemp,
                         'BrakeTempRR': my_phys.mWheel[3].mBrakeTemp,
-
-                        'TireTempFL': my_phys.mWheel[0].mTemperature[1], 
-                        'TireTempFR': my_phys.mWheel[1].mTemperature[1], 
-                        'TireTempRL': my_phys.mWheel[2].mTemperature[1], 
-                        'TireTempRR': my_phys.mWheel[3].mTemperature[1], 
                         
                         'TireWearFL': my_phys.mWheel[0].mWear * 100.0,
-                        'TireWearFR': my_phys.mWheel[1].mWear * 100.0,
-                        'TireWearRL': my_phys.mWheel[2].mWear * 100.0,
-                        'TireWearRR': my_phys.mWheel[3].mWear * 100.0,
-                        
-                        'WheelRotFL': my_phys.mWheel[0].mRotation,
-                        'LocalVelX': my_phys.mLocalVel.x,
                         
                         'CompetitorsCount': len(competitors),
                         'CompetitorsLive': competitors

@@ -1,5 +1,6 @@
 import time
 import threading
+import math
 
 class LiveSpotterEngine(threading.Thread):
     def __init__(self, telemetry_engine, audio_spotter):
@@ -7,7 +8,7 @@ class LiveSpotterEngine(threading.Thread):
         self.telemetry = telemetry_engine
         self.audio = audio_spotter
         self.running = True
-        self.session_start_time = time.time() # NOUVEAU: Délai d'activation dicté par l'audit
+        self.session_start_time = time.time()
         
         # --- MACHINES D'ÉTATS ---
         self.pit_entry_learned = False
@@ -22,7 +23,7 @@ class LiveSpotterEngine(threading.Thread):
         self.last_lap_distance = 0.0
         self.laps_completed = 0
         self.fuel_at_lap_start = -1.0
-        self.fuel_history = [] # NOUVEAU: Fenêtre glissante pour l'essence
+        self.fuel_history = [] 
 
         self.abs_abuse_counter = 0
         self.tc_abuse_counter = 0
@@ -53,7 +54,6 @@ class LiveSpotterEngine(threading.Thread):
             self._analyze_tires_and_brakes(data)
             self._analyze_chassis(data)
             
-            # Boucle d'analyse tactique à 10Hz
             time.sleep(0.1) 
 
     # =========================================================================
@@ -66,11 +66,9 @@ class LiveSpotterEngine(threading.Thread):
         
         if self.last_lap_distance > 3000 and current_dist < 100:
             self.laps_completed += 1
-            
             if self.fuel_at_lap_start > 0:
                 usage = self.fuel_at_lap_start - current_fuel
                 if usage > 0:
-                    # MODÈLE MATHÉMATIQUE : Fenêtre glissante de l'Audit
                     self.fuel_history.append(usage)
                     if len(self.fuel_history) > 5: 
                         self.fuel_history.pop(0)
@@ -97,24 +95,18 @@ class LiveSpotterEngine(threading.Thread):
         yellow = data.get('YellowFlag', 0)
         penalties = data.get('Penalties', 0)
         
-        # Détection d'un nouveau drapeau jaune
         if yellow > 0 and self.last_yellow_flag == 0:
             my_dist = data.get('MyLapDist', 0)
             hazard_distance = None
-            
-            # Recherche de la voiture crashée ou à l'arrêt
             for comp in data.get('CompetitorsLive', []):
                 gap = comp['lap_dist'] - my_dist
-                # Si la voiture est devant nous (entre 10m et 1500m)
                 if 10 < gap < 1500 and comp.get('last_lap', 100) > 0: 
                     hazard_distance = gap
                     break
 
             if hazard_distance:
-                # Alerte précise avec la distance mathématique
                 self.audio.say(f"Yellow flag. Incident ahead in {int(hazard_distance)} meters. Be ready to brake.", "yellow_flag_precise", cooldown=45)
             else:
-                # Alerte globale si l'ordinateur ne trouve pas la voiture
                 self.audio.say("Yellow flag in sector. Keep your eyes open.", "yellow_flag_global", cooldown=45)
 
         self.last_yellow_flag = yellow
@@ -125,13 +117,14 @@ class LiveSpotterEngine(threading.Thread):
 
     def _analyze_pit_entry(self, data):
         my_dist = data.get('MyLapDist', 0)
+        speed_limiter = data.get('Speed Limiter', 0)
+        in_pits = data.get('In Pits', 0)
         
         if not self.pit_entry_learned:
             for comp in data.get('CompetitorsLive', []):
                 if comp['in_pits'] == 1 and comp['lap_dist'] > 100:
                     self.pit_entry_dist = comp['lap_dist']
                     self.pit_entry_learned = True
-                    print(f"[SPOTTER] Entrée des stands localisée à {self.pit_entry_dist:.1f}m")
                     break
 
         if self.pit_entry_learned:
@@ -143,12 +136,12 @@ class LiveSpotterEngine(threading.Thread):
             if dist_to_pits < -50 or dist_to_pits > 1000:
                 self.warned_pit_limiter = False
 
+        if in_pits == 1 and speed_limiter == 0 and not self.warned_pit_limiter:
+            self.audio.say("You are in the pitlane. Speed limiter is OFF! Turn it on!", "pit_limiter_danger", cooldown=10)
+            self.warned_pit_limiter = True
+
     def _analyze_traffic_and_strategy(self, data):
-        import math
-        
-        # Délai d'activation de 5 secondes au départ pour éviter la cacophonie (Exigence Audit)
-        if time.time() - self.session_start_time < 5.0:
-            return
+        if time.time() - self.session_start_time < 5.0: return
         
         my_dist = data.get('MyLapDist', 0)
         my_speed = data.get('Speed', 0)
@@ -158,12 +151,10 @@ class LiveSpotterEngine(threading.Thread):
         
         if my_speed > 80:
             cars_alongside = 0
-            
             for comp in data.get('CompetitorsLive', []):
                 gap_dist = comp['lap_dist'] - my_dist
                 comp_class = comp.get('class', 'Unknown')
                 
-                # MODÈLE MATHÉMATIQUE : Calcul Euclidien 3D pour le Three-Wide
                 comp_x = comp.get('pos_x', 0.0)
                 comp_z = comp.get('pos_z', 0.0)
                 euclidean_dist = math.sqrt((comp_x - my_x)**2 + (comp_z - my_z)**2)
@@ -171,18 +162,13 @@ class LiveSpotterEngine(threading.Thread):
                 if abs(gap_dist) < 4.0 and 1.5 < euclidean_dist < 6.0:
                     cars_alongside += 1
                 
-                # LOGIQUE MULTICLASSE (Analyse des drapeaux bleus prédictifs)
                 if my_class != comp_class and comp_class != 'Unknown':
-                    # Si on est en Hypercar/LMP2 et qu'une GT est devant
                     if gap_dist > 0 and gap_dist < 150 and any(p in my_class for p in ["Hyper", "LMP"]):
                         if "GT" in comp_class:
                             self.audio.say("Slower class car ahead. Prepare to lap them safely.", "lap_traffic", cooldown=45)
-                    # Si on est en GT et qu'un prototype arrive derrière
                     elif gap_dist < 0 and gap_dist > -150 and "GT" in my_class:
                         if any(p in comp_class for p in ["Hyper", "LMP"]):
                             self.audio.say("Faster class prototype approaching behind. Hold your line.", "prototype_behind", cooldown=45)
-                
-                # LOGIQUE STANDARD (Même classe)
                 else:
                     if -60 < gap_dist < -15: 
                         self.audio.say("Traffic close behind, hold your line.", "traffic_behind", cooldown=45)
@@ -191,52 +177,55 @@ class LiveSpotterEngine(threading.Thread):
                     
             if cars_alongside >= 2:
                 self.audio.say("Three wide! Three wide! Hold your line!", "three_wide", cooldown=10)
-                
+
     # =========================================================================
     # 2. CAR HEALTH & WEATHER
     # =========================================================================
 
     def _analyze_damage(self, data):
         damage = data.get('AeroDamage', 0.0)
-        if damage > self.last_damage + 0.02: 
+        wheels_detached = data.get('WheelsDetached', 0)
+        
+        if wheels_detached > 0:
+            self.audio.say("Major crash detected. Wheel detached. Park the car safely.", "wheel_lost", cooldown=600)
+        elif damage > self.last_damage + 0.02: 
             self.audio.say("We see damage on the telemetry. Car will lose aero balance, adapt your driving.", "damage", cooldown=60)
+            
         self.last_damage = damage
 
     def _analyze_engine_and_temps(self, data):
-        # Sécurisation des données via get() avec fallback
         water_temp = data.get('EngineWaterTemp', 90.0) 
-        engine_dmg = data.get('EngineDamage', 0.0)
+        engine_dmg = data.get('EngineDamage', False)
         
-        # Surchauffe due au Dirty Air (Aspiration prolongée)
         if water_temp > 110.0:
             self.audio.say("Engine temperatures are critical. Pull out of the slipstream to cool the car.", "engine_hot", cooldown=180)
             
-        # Alerte de casse moteur
-        if engine_dmg > self.last_engine_damage + 0.05:
-            self.audio.say("Engine is taking damage. Watch your downshifts and temperatures.", "engine_dmg", cooldown=120)
+        if engine_dmg and not self.last_engine_damage:
+            self.audio.say("Engine is taking damage from overheating. Watch your downshifts.", "engine_dmg", cooldown=120)
         self.last_engine_damage = engine_dmg
 
     def _analyze_weather_and_grip(self, data):
         rain = data.get('RainIntensity', 0.0)
+        min_wetness = data.get('Minimum Path Wetness', 0.0)
+        off_wetness = data.get('OffpathWetness', 0.0)
         track_temp = data.get('TrackTemp', 30.0)
         speed = data.get('Speed', 0)
         raw_throttle = data.get('Throttle', 0)
         filtered_throttle = data.get('FilteredThrottle', 0)
         gear = data.get('Gear', 1)
         
-        # 1. Alerte pluie
         if rain > 0.05 and not self.rain_warned:
             self.audio.say("Track is getting wet. Move your brake bias to the rear and smooth your inputs.", "rain_start", cooldown=180)
             self.rain_warned = True
         elif rain < 0.01:
             self.rain_warned = False
 
-        # 2. Refroidissement de la piste (Fin de journée / Nuit)
-        # Nécessite de stocker self.last_track_temp dans l'init, mais on compare à des seuils bruts pour faire simple
-        if track_temp < 15.0:
-            self.audio.say("Track temperature is dropping fast. Mechanical grip will be lower.", "track_cold", cooldown=1800) # Cooldown 30 minutes
+        if rain == 0 and off_wetness > 0.3 and min_wetness < 0.1:
+            self.audio.say("Racing line is drying. Move off-line on the straights to cool your wet tires.", "cool_wets", cooldown=300)
 
-        # 3. Détection d'Aquaplaning
+        if track_temp < 15.0:
+            self.audio.say("Track temperature is dropping fast. Mechanical grip will be lower.", "track_cold", cooldown=1800)
+
         if rain > 0.2 and gear > 4 and raw_throttle > 80 and (raw_throttle - filtered_throttle) > 40:
             self.aqua_planing_counter += 1
             if self.aqua_planing_counter > 10: 
@@ -250,30 +239,27 @@ class LiveSpotterEngine(threading.Thread):
     # =========================================================================
 
     def _analyze_electronics(self, data):
-        raw_brake = data.get('Brake', 0)
-        filtered_brake = data.get('FilteredBrake', 0)
-        raw_throttle = data.get('Throttle', 0)
-        filtered_throttle = data.get('FilteredThrottle', 0)
         speed = data.get('Speed', 0)
-        rain = data.get('RainIntensity', 0.0)
+        wetness = data.get('Minimum Path Wetness', 0.0)
+        my_class = data.get('MyClass', 'Unknown').lower()
+        
+        has_abs = "gt3" in my_class
+        abs_active = data.get('ABS_Active', False)
+        tc_active = data.get('TC_Active', False)
 
-        # Multiplicateur de tolérance : Sous la pluie, l'ordi intervient plus, on augmente le seuil avant de spammer
-        tolerance = 2.0 if rain > 0.1 else 1.0
-
-        # ABS ABUSE
-        if raw_brake > 80 and (raw_brake - filtered_brake) > (20 * tolerance) and speed > 50:
+        if has_abs and abs_active and speed > 50:
             self.abs_abuse_counter += 1
             if self.abs_abuse_counter > 20: 
-                self.audio.say("Heavy ABS intervention. Try shifting brake bias to the rear for the next stint.", "abs_alert", cooldown=300)
+                self.audio.say("Heavy ABS intervention. You are overdriving the entry, move brake bias rearwards.", "abs_alert", cooldown=300)
                 self.abs_abuse_counter = 0
         else:
             self.abs_abuse_counter = max(0, self.abs_abuse_counter - 1)
 
-        # TC ABUSE (Sortie de courbe lente)
-        if raw_throttle > 80 and (raw_throttle - filtered_throttle) > (25 * tolerance) and speed < 120:
+        tc_limit = 30 if wetness > 0.1 else 15
+        if tc_active and speed < 160:
             self.tc_abuse_counter += 1
-            if self.tc_abuse_counter > 20:
-                self.audio.say("Traction control is cutting a lot of power. Be smoother on exit, or lower the TC angle.", "tc_alert", cooldown=300)
+            if self.tc_abuse_counter > tc_limit:
+                self.audio.say("Traction control is cutting too much power. Smooth your throttle application.", "tc_alert", cooldown=300)
                 self.tc_abuse_counter = 0
         else:
             self.tc_abuse_counter = max(0, self.tc_abuse_counter - 1)
@@ -284,26 +270,20 @@ class LiveSpotterEngine(threading.Thread):
 
         b_fl = data.get('BrakeTempFL', 300)
         b_fr = data.get('BrakeTempFR', 300)
-        
-        # Pression des 4 pneus (Sécurisé avec fallback à 180)
         p_fl = data.get('TirePressFL', 180)
         p_fr = data.get('TirePressFR', 180)
         p_rl = data.get('TirePressRL', 180)
         p_rr = data.get('TirePressRR', 180)
         t_fl = data.get('TireTempFL', 80) 
 
-        # 1. Alerte pneus froids en sortie de stand
         if self.laps_completed <= 1 and t_fl < 65:
             self.audio.say("Tires are cold. Brake early and avoid kerbs.", "tires_cold", cooldown=180)
 
-        # 2. DÉTECTION DE CREVAISON (PUNCTURE) - PRIORITÉ ABSOLUE
-        # Si un pneu tombe subitement sous 80 kPa en roulant vite
         if p_fl < 80 or p_fr < 80 or p_rl < 80 or p_rr < 80:
             self.audio.say("Puncture detected! Puncture! Slow down and box immediately.", "puncture", cooldown=60)
 
         if self.laps_completed < 2: return
 
-        # 3. Surchauffe freins et asymétrie
         if b_fl > 650:
             self.audio.say("Front brakes are overheating. Open brake ducts at the next pit stop.", "brakes_hot", cooldown=600)
         elif b_fl < 150:
@@ -312,24 +292,35 @@ class LiveSpotterEngine(threading.Thread):
         if abs(b_fl - b_fr) > 150: 
             self.audio.say("Brake temperature delta is massive. Car will pull to one side under braking.", "brakes_asym", cooldown=600)
 
-        # 4. Pressions anormales
-        if 80 <= p_fl < 165: # Entre 80 et 165 (sous 80 c'est la crevaison)
+        if 80 <= p_fl < 165: 
             self.audio.say("Tire pressures are critically low. We are losing mechanical grip.", "press_low", cooldown=600)
         elif p_fl > 195:
             self.audio.say("Tire pressures are too high. The tire is ballooning, be careful on traction.", "press_high", cooldown=600)
 
     def _analyze_chassis(self, data):
         rh_fl = data.get('RideHeightFL', 0.050)
+        rh_fr = data.get('RideHeightFR', 0.050)
+        vert_g = data.get('GForceVert', 0.0) 
         speed = data.get('Speed', 0)
+        steering_torque = data.get('SteeringTorque', 10.0)
+        steering_angle = data.get('Steering', 0.0)
 
-        # Détection du Bottoming (La planche frotte violemment l'asphalte à haute vitesse)
-        if speed > 240 and rh_fl < 0.015: 
+        # 1. Impacts verticaux (Sausage kerbs)
+        if vert_g > 3.0 or vert_g < -1.0: 
+            self.audio.say("Heavy vertical impact. Stay off those kerbs to save the floor.", "kerb_strike", cooldown=120)
+
+        # 2. Bottoming (On lit désormais la gauche ET la droite)
+        if speed > 240 and (rh_fl < 0.015 or rh_fr < 0.015): 
             self.bottoming_counter += 1
             if self.bottoming_counter > 20: 
-                self.audio.say("Car is bottoming out on the straights. We are losing top speed. Raise the front ride height or stiffen the packers.", "bottoming", cooldown=600)
+                self.audio.say("Car is bottoming out on the straights. We are losing top speed.", "bottoming", cooldown=600)
                 self.bottoming_counter = 0
         else:
             self.bottoming_counter = max(0, self.bottoming_counter - 1)
+            
+        # 3. Sous-virage terminal
+        if abs(steering_angle) > 90 and abs(steering_torque) < 2.0 and speed > 80:
+            self.audio.say("You are overdriving the front tires. Less steering angle to find the grip.", "understeer_torque", cooldown=120)
 
     def stop(self):
         self.running = False

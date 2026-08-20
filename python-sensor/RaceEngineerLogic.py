@@ -147,45 +147,82 @@ class RaceEngineerLogic:
         self.diagnostic_report.append(message)
         print(f"[ENGINEER/RADIO] {message}")
 
+    # ==========================================
+    # SUPERVISEUR DE RÉGLAGES (NOUVEAU)
+    # ==========================================
+    def _tweak(self, section, key, delta, advice_fixed, limit_min=None, limit_max=None, is_incar_setting=False):
+        """
+        Le cœur du système intelligent.
+        is_incar_setting = True si le paramètre peut être changé depuis le volant en roulant.
+        """
+        if getattr(self, 'is_fixed_setup', False) and not is_incar_setting:
+            self.log(f"🔧 Adaptation Pilotage (Setup Fixe) : {advice_fixed}")
+        else:
+            # Action mécanique réelle (ou conseil de volant si en fixed setup)
+            self.sm.modify_parameter(section, key, delta, limit_min, limit_max)
+            if is_incar_setting and getattr(self, 'is_fixed_setup', False):
+                self.log(f"🔘 Modification In-Car autorisée : Change ton réglage de {key} directement sur ton volant.")
+
+    # ==========================================
+    # MASTER CALL : 100% DATA-DRIVEN
+    # ==========================================
     def analyze_and_optimize(self, df_telemetry, session_context=None, df_competitors=None):
-        """Processus complet d'analyse d'un relais avec conscience de l'environnement ET des adversaires."""
+        """Processus d'analyse basé EXCLUSIVEMENT sur les données des capteurs."""
         if df_telemetry is None or df_telemetry.empty:
-            self.log("Box, box. Données insuffisantes, fais un tour de plus.")
+            self.log("Box, box. Données de télémétrie insuffisantes pour une analyse fiable.")
             return False
 
-        self.log("Copie. Analyse de la télémétrie en cours...")
+        self.log("Copie. Analyse dynamique de la télémétrie en cours...")
         
-        # 1. Gestion du contexte, météo et IDENTIFICATION VÉHICULE
+        # --- EXTRACTION 100% DYNAMIQUE (ZÉRO VALEUR EN DUR) ---
+        # On lit la température EXACTE enregistrée par la voiture pendant qu'elle roulait
+        track_temp = df_telemetry['TrackTemp'].mean() if 'TrackTemp' in df_telemetry.columns else 0.0
+        ambient_temp = df_telemetry['AmbientTemp'].mean() if 'AmbientTemp' in df_telemetry.columns else 0.0
+        
+        # Pluie basée sur le capteur d'humidité de la piste (Path Wetness), pas sur la météo du ciel
+        pluie = df_telemetry['Minimum Path Wetness'].max() if 'Minimum Path Wetness' in df_telemetry.columns else 0.0
+
         if session_context:
-            circuit = session_context.get('TrackName', 'Inconnu')
-            duree = session_context.get('SessionDurationMinutes', 40)
-            pluie = session_context.get('RainPathLevel', 0.0)
-            track_temp = session_context.get('TrackTemp', 30.0)
-            
-            # Reconnaissance de ta monture
+            circuit = session_context.get('TrackName', 'Unknown Track')
+            self.is_fixed_setup = bool(session_context.get('IsFixedSetup', False))
             self.current_car_model = session_context.get('VehicleName', 'Unknown')
             self.current_car_class = session_context.get('VehicleClass', 'Unknown')
-            
-            self.log(f"📍 Contexte : {circuit} | Météo : Air {session_context.get('AmbientTemp')}°C / Piste {track_temp}°C")
-            self.log(f"🏎️ Véhicule identifié : {self.current_car_model} ({self.current_car_class})")
-
-            if pluie > 0.1:
-                self.log("⚠️ Piste humide détectée. L'IA recommande d'activer le protocole Pluie (Rain Setup).")
-                
-            self._adapt_setup_to_session_format(race_duration_minutes=duree)
-            self.calculate_race_strategy(df_telemetry, duree, tank_capacity_liters=110.0)
+            duree = session_context.get('SessionDurationMinutes', 0)
         else:
-            self.log("⚠️ Attention radio : Contexte de session introuvable.")
-            track_temp = 30.0
-            circuit = "Unknown"
-            self._adapt_setup_to_session_format(race_duration_minutes=40)
+            circuit = "Unknown Track"
+            self.is_fixed_setup = False
+            self.current_car_model = "Unknown"
+            self.current_car_class = "Unknown"
+            # Calcul dynamique de la durée de la course si l'info serveur est absente
+            duree = (df_telemetry['LapTime'].sum() / 60.0) if 'LapTime' in df_telemetry.columns else 0
 
-        # 2. Analyse Châssis Standard
+        # Règle d'ingénierie absolue : Seule la catégorie GT3 a le droit à l'ABS dans le jeu
+        self.has_abs = "gt3" in self.current_car_class.lower()
+
+        # Log du contexte basé sur les vrais capteurs
+        self.log(f"📍 Piste : {circuit} | Météo : Air {ambient_temp:.1f}°C / Asphalte {track_temp:.1f}°C | Humidité sol : {pluie*100:.0f}%")
+        self.log(f"🏎️ Véhicule : {self.current_car_model} ({self.current_car_class}) | ABS: {'Oui' if self.has_abs else 'Non'} | Règles: {'SETUP FIXE' if self.is_fixed_setup else 'SETUP OUVERT'}")
+
+        if pluie > 0.1:
+            self.log("⚠️ Humidité confirmée par les capteurs pneus.")
+            
+        self._adapt_setup_to_session_format(race_duration_minutes=duree, pluie=pluie)
+        
+        # Capacité du réservoir dynamique selon le règlement de la catégorie (Hypercar ~90L, LMGT3 ~110L, LMP2 ~75L)
+        tank_cap = 110.0
+        if "hypercar" in self.current_car_class.lower() or "lmh" in self.current_car_class.lower(): tank_cap = 90.0
+        elif "p2" in self.current_car_class.lower(): tank_cap = 75.0
+        elif "p3" in self.current_car_class.lower(): tank_cap = 100.0
+        
+        self.calculate_race_strategy(df_telemetry, duree, tank_capacity_liters=tank_cap)
+
+        # --- EXÉCUTION DE TOUS LES MODULES AVEC LE DATAFRAME ---
         avg_data = df_telemetry.mean()
         self._analyze_mechanical_balance(df_telemetry)
         self._analyze_driver_traces(df_telemetry)
-        self._analyze_braking_and_slip_ratio(df_telemetry) # Remplacement par la version avec Slip Ratio
+        self._analyze_braking_and_slip_ratio(df_telemetry) 
         self._analyze_tire_temperatures(avg_data)
+        self._analyze_thermodynamics(df_telemetry)
         self._analyze_aero_platform(avg_data, df_telemetry)
         self._analyze_dampers(df_telemetry)
         self._analyze_differential(df_telemetry)
@@ -194,33 +231,35 @@ class RaceEngineerLogic:
         self._analyze_hybrid_deployment(df_telemetry)
         self._analyze_wear_and_damage(df_telemetry)
         self._analyze_electronics(df_telemetry)
-        self._optimize_cold_pressures(df_telemetry, session_context)
+        self._optimize_cold_pressures(df_telemetry, ambient_temp) # <-- On passe la VRAIE température de l'air
         self._analyze_track_specifics(circuit, df_telemetry)
+        self._analyze_endurance_brakes(df_telemetry, duree)
+        self._analyze_aero_environment(df_telemetry)
+        self._analyze_driver_torque(df_telemetry)
 
-        # --- AIGUILLAGE DYNAMIQUE SELON LA CLASSE ET LE MODÈLE ---
+        # --- AIGUILLAGE DES VÉHICULES ---
         car_name_lower = self.current_car_model.lower()
         car_class_lower = self.current_car_class.lower()
 
-        is_lmgt3 = "gt3" in car_class_lower or any(marque in car_name_lower for marque in ["mustang", "911", "huracan", "m4", "z06", "296", "lexus", "720s", "amg"]) and not "gte" in car_name_lower
-        is_gte = "gte" in car_class_lower or any(marque in car_name_lower for marque in ["rsr", "c8.r", "488", "vantage gte"])
-        is_hypercar = "hypercar" in car_class_lower or "lmh" in car_class_lower or "lmdh" in car_class_lower or any(marque in car_name_lower for marque in ["a424", "valkyrie", "hybrid v8", "cadillac", "v-series", "499p", "gmr-001", "scg 007", "tipo 6", "sc63", "9x8", "963", "gr010", "tr010", "vandervell"])
+        is_lmgt3 = "gt3" in car_class_lower or any(m in car_name_lower for m in ["mustang", "911", "huracan", "m4", "z06", "296", "lexus", "720s", "amg"]) and not "gte" in car_name_lower
+        is_gte = "gte" in car_class_lower or any(m in car_name_lower for m in ["rsr", "c8.r", "488", "vantage gte"])
+        is_hypercar = "hypercar" in car_class_lower or "lmh" in car_class_lower or "lmdh" in car_class_lower or any(m in car_name_lower for m in ["a424", "valkyrie", "hybrid v8", "cadillac", "v-series", "499p", "gmr-001", "scg 007", "tipo 6", "sc63", "9x8", "963", "gr010", "tr010", "vandervell"])
         is_lmp2 = "p2" in car_class_lower or "oreca" in car_name_lower
-        is_lmp3 = "p3" in car_class_lower or any(marque in car_name_lower for marque in ["duqueine", "d09", "ginetta", "g61", "ligier", "js p325", "adess", "ad25"])
+        is_lmp3 = "p3" in car_class_lower or any(m in car_name_lower for m in ["duqueine", "d09", "ginetta", "g61", "ligier", "js p325", "adess", "ad25"])
 
-        if is_lmgt3:
-            self._analyze_lmgt3_specifics(df_telemetry)
-        elif is_hypercar:
-            self._analyze_hypercar_specifics(df_telemetry)
-        elif is_lmp2:
-            self._analyze_lmp2_specifics(df_telemetry)
-        elif is_lmp3:
-            self._analyze_lmp3_specifics(df_telemetry)
+        if is_lmgt3: self._analyze_lmgt3_specifics(df_telemetry)
+        elif is_hypercar: self._analyze_hypercar_specifics(df_telemetry)
+        elif is_lmp2: self._analyze_lmp2_specifics(df_telemetry)
+        elif is_lmp3: self._analyze_lmp3_specifics(df_telemetry)
+        elif is_gte: self._analyze_gte_specifics(df_telemetry)
 
-        # 3. ANALYSE DES ADVERSAIRES
+        # --- STRATÉGIE ADVERSAIRES ---
         if df_competitors is not None and not df_competitors.empty:
             self.analyze_race_pace_vs_competitors(df_telemetry, df_competitors)
 
-        self.log("Setup prêt. Les modifications sont chargées pour ton prochain relais.")
+        if not self.is_fixed_setup:
+            self.log("✅ Check complet. Le fichier .svm est généré dans le garage.")
+        
         return True
 
     def _analyze_mechanical_balance(self, df):
@@ -308,43 +347,41 @@ class RaceEngineerLogic:
 
     def _analyze_dampers(self, df):
         """
-        MODÈLE MATHÉMATIQUE 3 : Histogrammes d'amortisseurs (Symétrie et Peakness).
-        Répond à l'exigence stricte de l'audit (Intégration d'aire et écart-type).
+        MODÈLE MATHÉMATIQUE 3 : Histogrammes d'amortisseurs.
+        LMU n'exporte que la Position (Susp Pos). L'IA doit dériver la position pour obtenir la Vélocité.
         """
-        susp_cols = ['SuspensionVelocityFL', 'SuspensionVelocityFR', 'SuspensionVelocityRL', 'SuspensionVelocityRR']
-        if all(col in df.columns for col in susp_cols):
-            for col in susp_cols:
-                # Séparation des vitesses pour l'intégration mathématique
+        corners = ['FL', 'FR', 'RL', 'RR']
+        
+        # 1. Calcul dynamique des vitesses de suspension (Dérivée)
+        for corner in corners:
+            pos_col = f'SuspPos{corner}'
+            vel_col = f'SuspVel{corner}'
+            if pos_col in df.columns:
+                # Calcul de la vélocité : Différence de position entre deux frames
+                df[vel_col] = df[pos_col].diff().fillna(0)
+
+        # 2. Analyse des Vélocités
+        vel_cols = [f'SuspVel{c}' for c in corners]
+        if all(col in df.columns for col in vel_cols):
+            for col in vel_cols:
                 bump_data = df[df[col] < 0][col] # Négatif = Compression
                 rebound_data = df[df[col] > 0][col] # Positif = Détente
                 
-                # 1. ANALYSE DE SYMÉTRIE (Jacking up / Packing down via Intégrale de l'aire)
                 bump_area = np.trapz(np.abs(bump_data)) if len(bump_data) > 1 else 1.0
                 rebound_area = np.trapz(rebound_data) if len(rebound_data) > 1 else 1.0
-                
                 symmetry_ratio = bump_area / rebound_area if rebound_area > 0 else 1.0
                 
                 wheel_prefix = "FRONT" if "F" in col else "REAR"
                 wheel_side = "LEFT" if "L" in col else "RIGHT"
                 section = f"{wheel_prefix}{wheel_side}"
                 
+                # Ces réglages sont 100% GARAGE (Interdits en Fixed Setup)
                 if symmetry_ratio > 1.3:
-                    self.log(f"Diagnostic Cinématique : La suspension {section} s'écrase (Packing down). L'aire de compression est trop large.")
-                    self.sm.modify_parameter(section, 'SlowBumpSetting', delta=+1)
+                    self.log(f"Diagnostic Cinématique : La suspension {section} s'écrase (Packing down).")
+                    self._tweak(section, 'SlowBumpSetting', +1, f"Ta suspension {section} talonne. Évite ce vibreur.", is_incar_setting=False)
                 elif symmetry_ratio < 0.7:
-                    self.log(f"Diagnostic Cinématique : La suspension {section} se soulève (Jacking up). Détente trop rapide.")
-                    self.sm.modify_parameter(section, 'SlowReboundSetting', delta=+1)
-
-                # 2. ANALYSE DE LA FORME DU PIC (Peakness via Écart-type)
-                std_dev = df[col].std()
-                if std_dev > 0.08: # Courbe trop étalée = sous-amorti
-                    self.log(f"Diagnostic Fréquentiel : Châssis flottant sur {section} (Sous-amorti).")
-                    self.sm.modify_parameter(section, 'SlowBumpSetting', delta=+1)
-                    self.sm.modify_parameter(section, 'SlowReboundSetting', delta=+1)
-                elif std_dev > 0 and std_dev < 0.015: # Courbe trop pointue = sur-amorti
-                    self.log(f"Diagnostic Fréquentiel : Châssis trop rigide sur {section} (Sur-amorti, perte de contact).")
-                    self.sm.modify_parameter(section, 'FastBumpSetting', delta=-1)
-                    self.sm.modify_parameter(section, 'FastReboundSetting', delta=-1)
+                    self.log(f"Diagnostic Cinématique : La suspension {section} se soulève (Jacking up).")
+                    self._tweak(section, 'SlowReboundSetting', +1, f"Ta roue {section} décolle en détente. Sois plus souple.", is_incar_setting=False)
 
     def _analyze_differential(self, df):
         """
@@ -371,23 +408,21 @@ class RaceEngineerLogic:
                     self.sm.modify_parameter('DRIVELINE', 'DiffPowerSetting', delta=-1)
 
     def _analyze_gearbox(self, df):
-        """
-        Analyse de l'étagement de la boîte de vitesses (Final Drive).
-        Objectif : Optimiser l'accélération tout en atteignant la VMax en fin de ligne droite.
-        """
-        if 'EngineRPM' in df.columns and 'TimeAtLimiter' in df.columns:
-            # Cas 1 : La voiture reste bloquée au rupteur en ligne droite (perte de vitesse)
-            if df['TimeAtLimiter'].max() > 1.0: 
-                self.log("Diagnostic : Le moteur sature au rupteur trop longtemps en ligne droite.")
-                self.log("Action : Allongement du rapport final (Final Drive) pour augmenter la Vitesse de Pointe.")
+        """Analyse de l'étagement de la boîte de vitesses (Final Drive)."""
+        if 'EngineRPM' in df.columns and 'EngineMaxRPM' in df.columns:
+            # On cherche si le moteur tape le rupteur (MaxRPM) sur de longues distances
+            df['AtLimiter'] = df['EngineRPM'] >= (df['EngineMaxRPM'] * 0.99)
+            limiter_hits = df['AtLimiter'].sum()
+            
+            if limiter_hits > 30: # Environ 0.5s au rupteur à 60Hz
+                self.log("Diagnostic : Le moteur sature au rupteur en fin de ligne droite.")
+                self.log("Action : Allongement du rapport final (Final Drive) pour augmenter la VMax.")
                 self.sm.modify_parameter('DRIVELINE', 'FinalDriveSetting', delta=+1)
                 
-            # Cas 2 : Le moteur s'essouffle et n'atteint pas son plein potentiel (estimation empirique)
-            elif df['EngineRPM'].max() < 8100:
-                self.log("Diagnostic : Le 6ème ou 7ème rapport est trop long, perte d'accélération.")
-                self.log("Action : Raccourcissement du rapport final pour plus de nervosité et de reprise.")
+            elif df['EngineRPM'].max() < (df['EngineMaxRPM'].max() * 0.92):
+                self.log("Diagnostic : Le dernier rapport est trop long, le moteur ne prend pas ses tours max.")
+                self.log("Action : Raccourcissement du rapport final pour plus d'accélération.")
                 self.sm.modify_parameter('DRIVELINE', 'FinalDriveSetting', delta=-1)
-                ()
 
     def calculate_race_strategy(self, df, race_duration_minutes, tank_capacity_liters):
         """
@@ -494,32 +529,33 @@ class RaceEngineerLogic:
             self.sm.modify_parameter('SUSPENSION', 'FrontAntiSwaySetting', delta=-1)
             self.sm.modify_parameter('SUSPENSION', 'RearAntiSwaySetting', delta=-1)
         
-    def _adapt_setup_to_session_format(self, race_duration_minutes):
+    def _adapt_setup_to_session_format(self, race_duration_minutes, pluie=0.0):
         """
-        Modifie la fiabilité et l'aéro du setup en fonction du type de course.
+        Modifie la fiabilité, l'aéro et réagit à la PLUIE.
         """
-        self.log(f"--- ADAPTATION AU FORMAT DE COURSE : {race_duration_minutes} MIN ---")
+        self.log(f"--- ADAPTATION AU FORMAT : {race_duration_minutes} MIN ---")
         
-        # Format Sprint / Daily Race (<= 60 minutes)
-        if race_duration_minutes <= 60:
-            self.log("Mode SPRINT activé : Priorité à la performance pure. Le poids et la traînée sont les ennemis.")
-            self.log("Action : Fermeture partielle des radiateurs et écopes de freins (Gain de VMax).")
-            # Les limites min empêchent de fermer à 100% pour éviter de casser le moteur
+        if pluie > 0.1:
+            self.log("🌧️ PROTOCOLE PLUIE ACTIVÉ : Assouplissement général du châssis et hausse de caisse pour l'évacuation de l'eau.")
+            self.sm.modify_parameter('SUSPENSION', 'FrontAntiSwaySetting', delta=-2, limit_min=0)
+            self.sm.modify_parameter('SUSPENSION', 'RearAntiSwaySetting', delta=-2, limit_min=0)
+            self.sm.modify_parameter('FRONTLEFT', 'RideHeightSetting', delta=+2)
+            self.sm.modify_parameter('FRONTRIGHT', 'RideHeightSetting', delta=+2)
+            self.sm.modify_parameter('REARLEFT', 'RideHeightSetting', delta=+2)
+            self.sm.modify_parameter('REARRIGHT', 'RideHeightSetting', delta=+2)
+            # Sous la pluie, on veut des réactions lentes
+            self.sm.modify_parameter('FRONTLEFT', 'SlowBumpSetting', delta=-1)
+            self.sm.modify_parameter('REARLEFT', 'SlowBumpSetting', delta=-1)
+
+        elif race_duration_minutes <= 60:
+            self.log("Mode SPRINT : Fermeture des radiateurs et écopes (Gain de VMax).")
             self.sm.modify_parameter('BODYAERO', 'WaterRadiatorSetting', delta=-1, limit_min=2)
-            self.sm.modify_parameter('BODYAERO', 'OilRadiatorSetting', delta=-1, limit_min=2)
             self.sm.modify_parameter('BODYAERO', 'BrakeDuctSetting', delta=-1, limit_min=1)
-            
-        # Format Endurance (> 60 minutes)
         else:
-            self.log("Mode ENDURANCE activé : Priorité à la fiabilité et à la préservation du matériel.")
-            self.log("Action : Ouverture du refroidissement (pour survivre dans le trafic) et sécurisation du fond plat.")
+            self.log("Mode ENDURANCE : Ouverture du refroidissement et sécurisation du fond plat.")
             self.sm.modify_parameter('BODYAERO', 'WaterRadiatorSetting', delta=+1, limit_max=5)
-            self.sm.modify_parameter('BODYAERO', 'BrakeDuctSetting', delta=+1, limit_max=5)
-            # On monte la caisse de 1mm pour éviter d'user la planche (Plank Wear) sur 6 heures de course
             self.sm.modify_parameter('FRONTLEFT', 'RideHeightSetting', delta=+1)
             self.sm.modify_parameter('FRONTRIGHT', 'RideHeightSetting', delta=+1)
-            self.sm.modify_parameter('REARLEFT', 'RideHeightSetting', delta=+1)
-            self.sm.modify_parameter('REARRIGHT', 'RideHeightSetting', delta=+1)
 
     def _analyze_hybrid_deployment(self, df):
         """
@@ -588,26 +624,48 @@ class RaceEngineerLogic:
     
     def _analyze_electronics(self, df):
         """
-        Analyse des aides à la conduite (TC et ABS).
-        Vital pour les LMGT3, les Hypercars, et les sessions sous la pluie.
+        Analyse des aides à la conduite (TC, TC Cut, ABS).
+        Ces paramètres sont modifiables depuis le volant (In-Car), MÊME EN SETUP FIXE !
         """
-        if 'UnfilteredBrake' in df.columns and 'FilteredBrake' in df.columns:
-            # On calcule l'écart moyen entre ce que le pilote demande et ce que l'ABS autorise
+        # --- 1. ABS (Uniquement GT3) ---
+        if self.has_abs and 'UnfilteredBrake' in df.columns and 'FilteredBrake' in df.columns:
             abs_intervention = (df['UnfilteredBrake'] - df['FilteredBrake']).mean()
-            
             if abs_intervention > 10.0:
                 self.log("Diagnostic (Électronique) : L'ABS s'active excessivement sur tes gros freinages.")
-                self.log("Action : Baisse ton réglage d'ABS au volant, ou recule la répartition (Brake Bias) pour soulager les pneus avant.")
-                self.sm.modify_parameter('CONTROLS', 'RearBrakeSetting', delta=+1)
+                self._tweak(
+                    section='CONTROLS', 
+                    key='RearBrakeSetting', 
+                    delta=+1, 
+                    advice_fixed="L'ABS sature à l'avant. Recule ta répartition de freinage (Brake Bias) via la molette du volant.",
+                    is_incar_setting=True # AUTORISÉ EN FIXED
+                )
+                
+        # --- 2. VÉHICULES SANS ABS (Lock-ups purs) ---
+        elif not self.has_abs and 'WheelSpeedFL' in df.columns and 'TopSpeed' in df.columns:
+            front_lockups = df[(df['TopSpeed'] > 100) & (df['Brake'] > 70) & (df['WheelSpeedFL'] < 10)]
+            if len(front_lockups) > 3:
+                self.log("🚨 ALERTE PILOTAGE : Véhicule sans ABS. Gros blocages de roues avant détectés !")
+                self._tweak(
+                    section='CONTROLS', 
+                    key='RearBrakeSetting', 
+                    delta=+1, 
+                    advice_fixed="Blocages à l'avant ! Recule ton Brake Bias immédiatement au volant.",
+                    is_incar_setting=True # AUTORISÉ EN FIXED
+                )
 
-        if 'UnfilteredThrottle' in df.columns and 'FilteredThrottle' in df.columns:
-            # On vérifie si le TC coupe l'accélération en sortie de courbe
-            tc_intervention = (df['UnfilteredThrottle'] - df['FilteredThrottle']).mean()
-            
-            if tc_intervention > 10.0:
-                self.log("Diagnostic (Électronique) : Le Traction Control (TC) bride énormément tes sorties de courbe.")
-                self.log("Action : Ton train arrière manque d'adhérence mécanique. Assouplis la barre anti-roulis arrière (Rear ARB) ou baisse le niveau de TC au volant.")
-                self.sm.modify_parameter('SUSPENSION', 'RearAntiSwaySetting', delta=-1)
+        # --- 3. TRACTION CONTROL (TC POWER & TC CUT) ---
+        # Si le TC Cut (coupure d'allumage) intervient trop
+        if 'TCCut' in df.columns and df['TCCut'].max() > 0:
+            tc_cut_avg = df[df['TCCut'] > 0]['TCCut'].mean()
+            if tc_cut_avg > 15.0:
+                self.log("Diagnostic (Électronique) : Le TC Cut bride massivement ton accélération.")
+                self._tweak(
+                    section='CONTROLS', 
+                    key='TCCutSetting', # Modif In-Car imaginaire/générique (LMU la gère via le Player.JSON)
+                    delta=-1, 
+                    advice_fixed="Baisse le TC Cut au volant, ou patiente un peu plus avant de réaccélérer.",
+                    is_incar_setting=True # AUTORISÉ EN FIXED
+                )
 
     def _optimize_cold_pressures(self, df, session_context):
         """
@@ -664,35 +722,41 @@ class RaceEngineerLogic:
                     self.log(f"[{section}] Pression optimale confirmée ({actual_hot:.1f} kPa).")
 
     def _analyze_aero_platform(self, avg_data, df):
-        """
-        Analyse de la hauteur de caisse et du fond plat (Rake).
-        Garantit que la voiture ne frotte pas excessivement à haute vitesse (perte de VMax).
-        """
-        if 'RideHeightFront' in df.columns and 'RideHeightRear' in df.columns:
-            min_front_rh = df['RideHeightFront'].min()
+        """Analyse de la hauteur de caisse, du Rake et des Chocs Verticaux (Kerb strikes)."""
+        
+        # 1. Analyse des G Verticaux (Sauts sur les vibreurs)
+        if 'VertAccel' in df.columns:
+            # Un choc > 3.0 G en vertical signifie un gros impact (Sausage kerb)
+            heavy_strikes = df[df['VertAccel'] > 3.0]
+            if len(heavy_strikes) > 5:
+                self.log("🚨 ALERTE CHÂSSIS : Violents impacts verticaux détectés (>3G).")
+                self._tweak('FRONTLEFT', 'FastBumpSetting', -1, "Tu attaques trop les vibreurs, la voiture saute. Élargis tes trajectoires.", is_incar_setting=False)
+                self._tweak('FRONTRIGHT', 'FastBumpSetting', -1, "", is_incar_setting=False)
+
+        # 2. Analyse du Fond Plat (Bottoming) et du Rake
+        if 'FrontRideHeight' in df.columns and 'RearRideHeight' in df.columns:
+            min_front_rh = df['FrontRideHeight'].min()
             
-            # Si l'avant touche le sol (Talonage / Bottoming)
-            if min_front_rh < 0.2:
+            if min_front_rh < 0.015: # Moins de 15mm du sol
                 self.log("Diagnostic : La planche frotte violemment le sol à haute vitesse (Bottoming).")
-                self.log("Action : Augmentation de la hauteur de caisse avant.")
-                self.sm.modify_parameter('FRONTLEFT', 'RideHeightSetting', delta=+1)
-                self.sm.modify_parameter('FRONTRIGHT', 'RideHeightSetting', delta=+1)
+                self._tweak('FRONTLEFT', 'RideHeightSetting', +1, "La voiture frotte au sol à haute vitesse. Essaie de soulager dans les grandes courbes bosselées.", is_incar_setting=False)
+                self._tweak('FRONTRIGHT', 'RideHeightSetting', +1, "", is_incar_setting=False)
                 
-            # Maintien de l'inclinaison (Rake) pour l'appui du diffuseur
-            avg_rake = avg_data['RideHeightRear'] - avg_data['RideHeightFront']
-            if avg_rake < 1.0:
+            avg_rake = avg_data['RearRideHeight'] - avg_data['FrontRideHeight']
+            if avg_rake < 0.010: # Moins de 10mm de Rake
                 self.log("Diagnostic : La voiture est trop plate (manque de Rake). Le diffuseur perd de son efficacité.")
-                self.sm.modify_parameter('REARLEFT', 'RideHeightSetting', delta=+1)
-                self.sm.modify_parameter('REARRIGHT', 'RideHeightSetting', delta=+1)
+                self._tweak('REARLEFT', 'RideHeightSetting', +1, "Le nez de la voiture ne plonge pas assez au freinage. Déplace le Brake Bias vers l'avant.", is_incar_setting=True)
+                self._tweak('REARRIGHT', 'RideHeightSetting', +1, "", is_incar_setting=False)
 
     def _analyze_tire_temperatures(self, avg_data):
         """
-        Analyse la répartition thermique (Inner, Middle, Outer) pour régler le Carrossage (Camber).
-        Cible théorique : L'intérieur (I) doit être environ 5 à 10°C plus chaud que l'extérieur (O).
+        Analyse de la GÉOMÉTRIE. 
+        En WEC, on utilise la température de Carcasse (Core) et non la surface (Rubber) qui refroidit vite.
         """
         self.log("--- ANALYSE DE LA GÉOMÉTRIE (CARROSSAGE) ---")
         
-        # Pneu Avant Gauche (Exemple représentatif pour le train avant)
+        # Pneu Avant Gauche (TireTemp_I/O sont en surface, TireCarcass est le cœur)
+        # DuckDB nous donne l'intérieur et l'extérieur via les tableaux
         if 'TireTempFL_I' in avg_data and 'TireTempFL_O' in avg_data:
             temp_in_fl = avg_data['TireTempFL_I']
             temp_out_fl = avg_data['TireTempFL_O']
@@ -700,26 +764,19 @@ class RaceEngineerLogic:
             
             if spread_front > 12.0:
                 self.log(f"Diagnostic : Surchauffe interne massive à l'avant (Delta: {spread_front:.1f}°C).")
-                self.log("Action : Tu as trop de carrossage négatif. Réduction du Camber avant (+1 Index vers zéro).")
-                self.sm.modify_parameter('FRONTLEFT', 'CamberSetting', delta=+1)
-                self.sm.modify_parameter('FRONTRIGHT', 'CamberSetting', delta=+1)
+                self._tweak('FRONTLEFT', 'CamberSetting', +1, "Surchauffe intérieure. Tourne le volant de manière plus fluide.", is_incar_setting=False)
+                self._tweak('FRONTRIGHT', 'CamberSetting', +1, "Surchauffe intérieure.", is_incar_setting=False)
             elif spread_front < 2.0:
                 self.log(f"Diagnostic : L'extérieur du pneu avant chauffe trop (Delta: {spread_front:.1f}°C).")
-                self.log("Action : Manque de carrossage négatif. Augmentation du Camber.")
-                self.sm.modify_parameter('FRONTLEFT', 'CamberSetting', delta=-1) 
-                self.sm.modify_parameter('FRONTRIGHT', 'CamberSetting', delta=-1)
+                self._tweak('FRONTLEFT', 'CamberSetting', -1, "Grip sous-exploité. Augmente ton angle de braquage (Steering Lock) ou sois plus agressif.", is_incar_setting=False) 
+                self._tweak('FRONTRIGHT', 'CamberSetting', -1, "Grip sous-exploité.", is_incar_setting=False)
 
-        # Pneu Arrière Gauche (Exemple représentatif pour le train arrière)
         if 'TireTempRL_I' in avg_data and 'TireTempRL_O' in avg_data:
-            temp_in_rl = avg_data['TireTempRL_I']
-            temp_out_rl = avg_data['TireTempRL_O']
-            spread_rear = temp_in_rl - temp_out_rl
-            
-            # L'arrière nécessite généralement moins de carrossage que l'avant pour maximiser la motricité
+            spread_rear = avg_data['TireTempRL_I'] - avg_data['TireTempRL_O']
             if spread_rear > 8.0:
                 self.log("Diagnostic : Trop de carrossage arrière. Perte de surface de contact à l'accélération.")
-                self.sm.modify_parameter('REARLEFT', 'CamberSetting', delta=+1)
-                self.sm.modify_parameter('REARRIGHT', 'CamberSetting', delta=+1)
+                self._tweak('REARLEFT', 'CamberSetting', +1, "Glisse arrière détectée (Surchauffe interne). Gère mieux ton accélération.", is_incar_setting=False)
+                self._tweak('REARRIGHT', 'CamberSetting', +1, "Glisse arrière détectée.", is_incar_setting=False)
 
     def _analyze_lmgt3_specifics(self, df):
         """
@@ -1014,3 +1071,107 @@ class RaceEngineerLogic:
                 self.sm.modify_parameter('REARRIGHT', 'RideHeightSetting', delta=+1)
                 self.sm.modify_parameter('FRONTLEFT', 'CamberSetting', delta=-1)
                 self.sm.modify_parameter('FRONTRIGHT', 'CamberSetting', delta=-1)
+
+    def _analyze_thermodynamics(self, df):
+        """
+        Analyse les températures critiques du moteur et des freins.
+        Permet d'ajuster l'aérodynamique (Radiateurs et Écopes) en fonction du pilotage réel,
+        plutôt que de se fier uniquement à la durée de la course.
+        """
+        self.log("--- ANALYSE THERMODYNAMIQUE (MOTEUR & FREINS) ---")
+        
+        # 1. Analyse du Refroidissement Moteur (Water / Oil)
+        if 'EngineWaterTemp' in df.columns:
+            max_water = df['EngineWaterTemp'].max()
+            if max_water > 108.0:
+                self.log(f"🚨 DANGER MOTEUR : Surchauffe de l'eau détectée ({max_water:.1f}°C). Le moteur perd de la puissance.")
+                self.log("Action : Ouverture de 2 crans du radiateur d'eau. Tu perdras un peu de VMax, mais tu sauveras le moteur.")
+                self.sm.modify_parameter('BODYAERO', 'WaterRadiatorSetting', delta=+2, limit_max=5)
+            elif max_water < 85.0:
+                self.log(f"Diagnostic : Refroidissement moteur excessif ({max_water:.1f}°C max).")
+                self.log("Action : Fermeture du radiateur d'eau pour réduire la traînée aéro (Drag) et gagner en VMax.")
+                self.sm.modify_parameter('BODYAERO', 'WaterRadiatorSetting', delta=-1, limit_min=1)
+
+        # 2. Analyse du Refroidissement des Freins (Brake Ducts)
+        if 'BrakeTempFL' in df.columns and 'BrakeTempFR' in df.columns:
+            max_brake_front = max(df['BrakeTempFL'].max(), df['BrakeTempFR'].max())
+            min_brake_front = min(df['BrakeTempFL'].min(), df['BrakeTempFR'].min())
+            
+            # Définition dynamique des seuils selon le type de voiture (Carbone vs Acier)
+            is_carbon_brakes = any(h in self.current_car_class.lower() for h in ["hypercar", "lmh", "lmdh", "p2", "p3"])
+            hot_threshold = 650.0 if is_carbon_brakes else 550.0
+            cold_threshold = 300.0 if is_carbon_brakes else 200.0
+            
+            if max_brake_front > hot_threshold:
+                self.log(f"🚨 DANGER FREINS : Disques avant en surchauffe ({max_brake_front:.0f}°C). Risque de 'Brake Fade' (pédale molle).")
+                self.log("Action : Ouverture des écopes de freins avant (Front Brake Ducts).")
+                self.sm.modify_parameter('BODYAERO', 'BrakeDuctSetting', delta=+1, limit_max=6)
+            elif min_brake_front > 0 and max_brake_front < cold_threshold:
+                self.log(f"Diagnostic : Freins avant trop froids ({max_brake_front:.0f}°C max). Manque de mordant initial.")
+                self.log("Action : Fermeture des écopes de freins. Améliore la VMax et aide à chauffer les pneus avant.")
+                self.sm.modify_parameter('BODYAERO', 'BrakeDuctSetting', delta=-1, limit_min=1)
+
+
+    def _analyze_endurance_brakes(self, df, race_duration_minutes):
+        """
+        Utilise 'Brake Thickness' (Épaisseur des plaquettes) pour prédire s'il faut les changer aux stands.
+        Vital en WEC et IMSA.
+        """
+        if 'BrakeThickFL' in df.columns:
+            start_thick = df['BrakeThickFL'].iloc[0]
+            end_thick = df['BrakeThickFL'].iloc[-1]
+            wear_per_lap = start_thick - end_thick
+            
+            if wear_per_lap > 0:
+                avg_lap_time = df['LapTime'].mean()
+                total_laps_est = (race_duration_minutes * 60) / avg_lap_time
+                projected_wear = wear_per_lap * total_laps_est
+                
+                # Une plaquette neuve fait environ 25-30mm. Sous 10mm, ça devient dangereux.
+                if (start_thick - projected_wear) < 10.0:
+                    self.log(f"🚨 STRATÉGIE ENDURANCE : Usure des freins critiques prévue. Prévoyez un changement de plaquettes (Brake Change) au prochain arrêt !")
+                else:
+                    self.log(f"✅ Freins sécurisés : Il restera environ {start_thick - projected_wear:.1f}mm de plaquettes à l'arrivée.")
+
+    def _analyze_aero_environment(self, df):
+        """
+        Analyse l'impact du Vent et du 3ème Amortisseur (Heave).
+        """
+        self.log("--- ANALYSE AÉRO ET ENVIRONNEMENT ---")
+        
+        # Impact du vent sur les Hunaudières ou zones rapides
+        if 'WindSpeed' in df.columns and 'WindHeading' in df.columns and 'YawRate' in df.columns:
+            max_wind = df['WindSpeed'].max()
+            if max_wind > 5.0: # Plus de 18 km/h de vent
+                self.log(f"🌪️ Vent fort détecté ({max_wind*3.6:.1f} km/h).")
+                self.log("Conseil : Tes points de freinage vont drastiquement changer selon que le vent est de face (freine plus tard) ou de dos (freine plus tôt).")
+
+        # Plongeon à haute vitesse (Heave Damper)
+        if 'Front3rdDeflection' in df.columns and 'TopSpeed' in df.columns:
+            high_speed_zones = df[df['TopSpeed'] > 250]
+            if not high_speed_zones.empty:
+                max_deflection = high_speed_zones['Front3rdDeflection'].max()
+                # Si le 3ème amortisseur s'écrase au maximum de sa course
+                if max_deflection > 0.025: 
+                    self.log("Diagnostic Aéro : Le nez de la voiture s'écrase totalement à très haute vitesse sous l'effet de l'appui.")
+                    self.log("Action : Augmentation de la rigidité du 3ème ressort avant (Front Third Spring) ou diminution du Rake pour gagner en VMax.")
+                    # Modif de setup (si supporté par la voiture, ex Hypercar/LMP2)
+                    self.sm.modify_parameter('FRONTTHIRD', 'SpringSetting', delta=+1)
+                    
+    def _analyze_driver_torque(self, df):
+        """
+        Analyse du sous-virage terminal via la perte de Force Feedback.
+        """
+        if 'SteeringTorque' in df.columns and 'SteeringAngle' in df.columns and 'LatAccel' in df.columns:
+            # On cherche les virages appuyés
+            corners = df[abs(df['SteeringAngle']) > 45]
+            if not corners.empty:
+                # Si on braque de plus en plus, mais que le volant devient "mou" (baisse de Torque)
+                # Cela signifie que les pneus glissent sur l'asphalte (Perte d'alignement pneumatique)
+                for _, row in corners.iterrows():
+                    if abs(row['SteeringAngle']) > 90 and abs(row['SteeringTorque']) < 5.0 and abs(row['LatAccel']) < 1.0:
+                        self.log("🚨 ALERTE PILOTAGE : Sous-virage terminal détecté (Perte brutale de Force Feedback).")
+                        self.log("Conseil : Tu braques trop ton volant, tes pneus avant saturent et glissent. Réduis l'angle de braquage pour retrouver du grip.")
+                        break # Une seule alerte suffit
+
+    
