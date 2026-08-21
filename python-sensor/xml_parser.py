@@ -278,10 +278,10 @@ class XMLHistoryParser:
             try:
                 con = duckdb.connect(database=f, read_only=True)
                 
-                # --- NOUVEAU : On filtre STRICTEMENT sur "JOLY" pour ne pas voir les autres humains du serveur ---
+                # --- SÉLECTION DU CARTYPE ET FILTRE STRICT SUR JOLY ---
                 query = """
                     SELECT s.TrackVenue, s.SessionType, s.DurationMinutes, s.SessionDate, s.FileID, s.FuelMult, s.TireMult,
-                           d.VehName, d.CarClass, d.BestLapTime, d.LapsCompleted, d.GridPos, d.ClassPosition, d.DriverName, d.isPlayer
+                           d.VehName, d.CarClass, d.CarType, d.BestLapTime, d.LapsCompleted, d.GridPos, d.ClassPosition, d.DriverName
                     FROM sessions s
                     JOIN session_drivers d ON s.FileID = d.FileID AND s.SessionType = d.SessionType
                     WHERE UPPER(d.DriverName) LIKE '%JOLY%'
@@ -402,6 +402,7 @@ class XMLHistoryParser:
                             "track": row['TrackVenue'],
                             "car": row['VehName'],
                             "class": row['CarClass'],
+                            "carType": str(row['CarType']) if 'CarType' in row and pd.notna(row['CarType']) else "",
                             "type": str(row['SessionType']).capitalize(),
                             "grid": int(row['GridPos']) if pd.notna(row['GridPos']) else 0,
                             "finish": int(row['ClassPosition']) if pd.notna(row['ClassPosition']) else 0,
