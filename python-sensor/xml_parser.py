@@ -58,7 +58,14 @@ class XMLHistoryParser:
             con.execute("""
                 CREATE TABLE sessions (
                     FileID VARCHAR, SessionType VARCHAR, TrackVenue VARCHAR, TrackLength FLOAT,
-                    SessionDate VARCHAR, DurationMinutes INT
+                    SessionDate VARCHAR, DurationMinutes INT,
+                    Setting VARCHAR, ServerName VARCHAR, ClientFuelVisible INT, PlayerFile VARCHAR,
+                    TrackCourse VARCHAR, TrackEvent VARCHAR, TrackData VARCHAR, GameVersion VARCHAR,
+                    Dedicated INT, ConnectionType VARCHAR, RaceLaps INT, RaceTime INT,
+                    MechFailRate INT, DamageMult INT, FuelMult INT, TireMult INT,
+                    VehiclesAllowed VARCHAR, ParcFerme INT, FixedSetups INT, FreeSettings BIGINT,
+                    FixedUpgrades INT, TireWarmers INT, SessionLaps BIGINT, FormationAndStart INT,
+                    MostLapsCompleted INT
                 )
             """)
             con.execute("""
@@ -66,39 +73,80 @@ class XMLHistoryParser:
                     FileID VARCHAR, SessionType VARCHAR, DriverName VARCHAR, isPlayer INT, 
                     VehName VARCHAR, CarClass VARCHAR, 
                     GridPos INT, Position INT, ClassPosition INT, 
-                    BestLapTime FLOAT, FinishTime FLOAT, LapsCompleted INT, Pitstops INT, FinishStatus VARCHAR
+                    BestLapTime FLOAT, FinishTime FLOAT, LapsCompleted INT, Pitstops INT, FinishStatus VARCHAR,
+                    Connected INT, VehFile VARCHAR, UpgradeCode VARCHAR, Category VARCHAR,
+                    CarType VARCHAR, CarNumber VARCHAR, TeamName VARCHAR, ServerScored INT,
+                    ClassGridPos INT, LapRankIncludingDiscos INT, DNFReason VARCHAR, ControlAndAids VARCHAR
                 )
             """)
-            # AJOUT DU FUEL_LEVEL ET VE_LEVEL ICI
             con.execute("""
                 CREATE TABLE laps (
                     FileID VARCHAR, SessionType VARCHAR, DriverName VARCHAR, CarClass VARCHAR, 
                     Lap INT, LapTime FLOAT, Sector1 FLOAT, Sector2 FLOAT, Sector3 FLOAT, 
                     TopSpeed FLOAT, FuelLevel FLOAT, FuelUsed FLOAT, VELevel FLOAT, VirtualEnergyUsed FLOAT,
                     WearFL FLOAT, WearFR FLOAT, WearRL FLOAT, WearRR FLOAT,
-                    FrontTire VARCHAR, RearTire VARCHAR, Pit INT
+                    FrontTire VARCHAR, RearTire VARCHAR, Pit INT,
+                    Pos INT, ElapsedTime FLOAT, FL_Tire VARCHAR, FR_Tire VARCHAR, RL_Tire VARCHAR, RR_Tire VARCHAR
                 )
             """)
             con.execute("""
                 CREATE TABLE stream_events (
                     FileID VARCHAR, SessionType VARCHAR, EventType VARCHAR, 
-                    EventTime FLOAT, DriverName VARCHAR, RawText VARCHAR
+                    EventTime FLOAT, DriverName VARCHAR, RawText VARCHAR,
+                    DriverID VARCHAR, Lap INT, WarningPoints FLOAT, CurrentPoints FLOAT,
+                    Resolution VARCHAR, Sector VARCHAR, SectorClass VARCHAR, Point INT
                 )
             """)
 
-            track_venue = self._safe_str(root, './/TrackVenue')
-            track_length = self._safe_float(root, './/TrackLength')
+            g_setting = self._safe_str(root, './/Setting')
+            g_server = self._safe_str(root, './/ServerName', default="")
+            g_fuel_vis = self._safe_int(root, './/ClientFuelVisible')
+            g_plr_file = self._safe_str(root, './/PlayerFile')
+            g_track_venue = self._safe_str(root, './/TrackVenue')
+            g_track_course = self._safe_str(root, './/TrackCourse')
+            g_track_event = self._safe_str(root, './/TrackEvent')
+            g_track_data = self._safe_str(root, './/TrackData')
+            g_track_length = self._safe_float(root, './/TrackLength')
+            g_game_ver = self._safe_str(root, './/GameVersion')
+            g_dedicated = self._safe_int(root, './/Dedicated')
+            g_conn_type = self._safe_str(root, './/ConnectionType')
+            g_race_laps = self._safe_int(root, './/RaceLaps')
+            g_race_time = self._safe_int(root, './/RaceTime')
+            g_mech_fail = self._safe_int(root, './/MechFailRate')
+            g_dmg_mult = self._safe_int(root, './/DamageMult')
+            g_fuel_mult = self._safe_int(root, './/FuelMult')
+            g_tire_mult = self._safe_int(root, './/TireMult')
+            g_veh_allowed = self._safe_str(root, './/VehiclesAllowed')
+            g_parc_ferme = self._safe_int(root, './/ParcFerme')
+            g_fixed_setups = self._safe_int(root, './/FixedSetups')
+            g_free_settings = self._safe_int(root, './/FreeSettings')
+            g_fixed_upgrades = self._safe_int(root, './/FixedUpgrades')
+            g_tire_warmers = self._safe_int(root, './/TireWarmers')
+            g_timestring = self._safe_str(root, './/TimeString', default="Unknown Date")
             
             session_tags = ['Practice', 'Practice1', 'Practice2', 'Practice3', 'Qualify', 'Qualify1', 'Qualify2', 'Warmup', 'Race', 'Race1', 'Race2']
             
             for s_type in session_tags:
                 session_node = root.find(f'.//{s_type}')
                 if session_node is not None:
-                    session_date = self._safe_str(session_node, 'TimeString')
+                    # --- NOUVEAU : Fallback automatique sur l'heure globale ---
+                    session_date = self._safe_str(session_node, 'TimeString', default=g_timestring)
                     duration_minutes = self._safe_int(session_node, 'Minutes')
                     if duration_minutes == 0: duration_minutes = self._safe_int(session_node, 'RaceTime')
+                    
+                    s_laps = self._safe_int(session_node, 'Laps')
+                    s_form = self._safe_int(session_node, 'FormationAndStart')
+                    s_most_laps = self._safe_int(session_node, 'MostLapsCompleted')
                         
-                    con.execute("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?)", [file_id, s_type, track_venue, track_length, session_date, duration_minutes])
+                    con.execute("""
+                        INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, [
+                        file_id, s_type, g_track_venue, g_track_length, session_date, duration_minutes,
+                        g_setting, g_server, g_fuel_vis, g_plr_file, g_track_course, g_track_event, g_track_data,
+                        g_game_ver, g_dedicated, g_conn_type, g_race_laps, g_race_time, g_mech_fail, g_dmg_mult,
+                        g_fuel_mult, g_tire_mult, g_veh_allowed, g_parc_ferme, g_fixed_setups, g_free_settings,
+                        g_fixed_upgrades, g_tire_warmers, s_laps, s_form, s_most_laps
+                    ])
                                 
                     for driver in session_node.findall('.//Driver'):
                         d_name = self._safe_str(driver, 'Name')
@@ -114,37 +162,69 @@ class XMLHistoryParser:
                         laps_comp = self._safe_int(driver, 'Laps')
                         pits = self._safe_int(driver, 'Pitstops')
                         status = self._safe_str(driver, 'FinishStatus')
+
+                        # Nouvelles balises pilotes exhaustives
+                        d_conn = self._safe_int(driver, 'Connected', default=1)
+                        d_vehfile = self._safe_str(driver, 'VehFile')
+                        d_upg = self._safe_str(driver, 'UpgradeCode')
+                        d_cat = self._safe_str(driver, 'Category')
+                        d_cartype = self._safe_str(driver, 'CarType')
+                        d_num = self._safe_str(driver, 'CarNumber')
+                        d_team = self._safe_str(driver, 'TeamName')
+                        d_scored = self._safe_int(driver, 'ServerScored', default=1)
+                        d_cgrid = self._safe_int(driver, 'ClassGridPos')
+                        d_laprank = self._safe_int(driver, 'LapRankIncludingDiscos')
+                        d_dnf_reason = self._safe_str(driver, 'DNFReason', default="")
+                        d_aids = self._safe_str(driver, 'ControlAndAids', default="")
                         
-                        con.execute("INSERT INTO session_drivers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", 
-                                    [file_id, s_type, d_name, d_isPlayer, d_veh, d_class, grid_pos, pos, c_pos, best_lap, finish_time, laps_comp, pits, status])
+                        con.execute("""
+                            INSERT INTO session_drivers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, [
+                            file_id, s_type, d_name, d_isPlayer, d_veh, d_class, grid_pos, pos, c_pos, best_lap, finish_time, laps_comp, pits, status,
+                            d_conn, d_vehfile, d_upg, d_cat, d_cartype, d_num, d_team, d_scored, d_cgrid, d_laprank, d_dnf_reason, d_aids
+                        ])
                         
                         for lap in driver.findall('Lap'):
                             lap_num = int(lap.get('num', 0))
                             try: lap_time = float(lap.text) if lap.text and lap.text != '--.----' else 0.0
                             except: lap_time = 0.0
                             
-                            s1 = float(lap.get('s1', 0)) if lap.get('s1') else 0.0
-                            s2 = float(lap.get('s2', 0)) if lap.get('s2') else 0.0
-                            s3 = float(lap.get('s3', 0)) if lap.get('s3') else 0.0
-                            topspeed = float(lap.get('topspeed', 0)) if lap.get('topspeed') else 0.0
+                            # --- NOUVEAU : Bouclier anti-crash pour les valeurs "--.---" de LMU ---
+                            def _get_f(key, default=0.0):
+                                val = lap.get(key)
+                                if not val or val == '--.---': return default
+                                try: return float(val)
+                                except: return default
                             
-                            # EXTRACTION DIRECTE DES JAUGES REELLES DE LMU
-                            fuel_level = float(lap.get('fuel', 0)) if lap.get('fuel') else 0.0
-                            fuel_used = float(lap.get('fuelUsed', 0)) if lap.get('fuelUsed') else 0.0
-                            ve_level = float(lap.get('ve', 0)) if lap.get('ve') else 0.0
-                            ve_used = float(lap.get('veUsed', 0)) * 100 if lap.get('veUsed') else 0.0
+                            s1, s2, s3 = _get_f('s1'), _get_f('s2'), _get_f('s3')
+                            topspeed = _get_f('topspeed')
+                            fuel_level, fuel_used = _get_f('fuel'), _get_f('fuelUsed')
+                            ve_level, ve_used = _get_f('ve'), _get_f('veUsed') * 100.0
                             
-                            w_fl = float(lap.get('twfl', 1.0)) * 100 if lap.get('twfl') else 100.0
-                            w_fr = float(lap.get('twfr', 1.0)) * 100 if lap.get('twfr') else 100.0
-                            w_rl = float(lap.get('twrl', 1.0)) * 100 if lap.get('twrl') else 100.0
-                            w_rr = float(lap.get('twrr', 1.0)) * 100 if lap.get('twrr') else 100.0
+                            w_fl = _get_f('twfl', 1.0) * 100.0
+                            w_fr = _get_f('twfr', 1.0) * 100.0
+                            w_rl = _get_f('twrl', 1.0) * 100.0
+                            w_rr = _get_f('twrr', 1.0) * 100.0
+                            
                             f_comp = lap.get('fcompound', 'Unknown').split(',')[-1] if lap.get('fcompound') else "Unknown"
                             r_comp = lap.get('rcompound', 'Unknown').split(',')[-1] if lap.get('rcompound') else "Unknown"
                             is_pit = 1 if lap.get('pit') == '1' else 0
                             
+                            try: l_pos = int(lap.get('p', pos))
+                            except: l_pos = pos
+                            
+                            l_et = _get_f('et')
+                            l_fl_tire = lap.get('FL', 'Unknown').split(',')[-1] if lap.get('FL') else f_comp
+                            l_fr_tire = lap.get('FR', 'Unknown').split(',')[-1] if lap.get('FR') else f_comp
+                            l_rl_tire = lap.get('RL', 'Unknown').split(',')[-1] if lap.get('RL') else r_comp
+                            l_rr_tire = lap.get('RR', 'Unknown').split(',')[-1] if lap.get('RR') else r_comp
+                            
                             con.execute("""
-                                INSERT INTO laps VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """, [file_id, s_type, d_name, d_class, lap_num, lap_time, s1, s2, s3, topspeed, fuel_level, fuel_used, ve_level, ve_used, w_fl, w_fr, w_rl, w_rr, f_comp, r_comp, is_pit])
+                                INSERT INTO laps VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, [
+                                file_id, s_type, d_name, d_class, lap_num, lap_time, s1, s2, s3, topspeed, fuel_level, fuel_used, ve_level, ve_used, 
+                                w_fl, w_fr, w_rl, w_rr, f_comp, r_comp, is_pit, l_pos, l_et, l_fl_tire, l_fr_tire, l_rl_tire, l_rr_tire
+                            ])
                     
                     stream_node = session_node.find('Stream')
                     if stream_node is not None:
@@ -153,7 +233,23 @@ class XMLHistoryParser:
                             et_time = float(event.get('et', 0.0)) if event.get('et') else 0.0
                             d_name = event.get('Driver', "Unknown")
                             raw_text = event.text if event.text else ""
-                            con.execute("INSERT INTO stream_events VALUES (?, ?, ?, ?, ?, ?)", [file_id, s_type, tag, et_time, d_name, raw_text])
+                            
+                            # Nouvelles balises d'événements étendues
+                            e_id = event.get('ID', "")
+                            e_lap = int(event.get('Lap', 0)) if event.get('Lap') else 0
+                            e_wpoints = float(event.get('WarningPoints', 0.0)) if event.get('WarningPoints') else 0.0
+                            e_cpoints = float(event.get('CurrentPoints', 0.0)) if event.get('CurrentPoints') else 0.0
+                            e_res = event.get('Resolution', "")
+                            e_sec = event.get('Sector', "")
+                            e_class = event.get('Class', "")
+                            e_point = int(event.get('point', 0)) if event.get('point') else 0
+
+                            con.execute("""
+                                INSERT INTO stream_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, [
+                                file_id, s_type, tag, et_time, d_name, raw_text,
+                                e_id, e_lap, e_wpoints, e_cpoints, e_res, e_sec, e_class, e_point
+                            ])
 
             con.commit()
             con.close()
@@ -164,10 +260,15 @@ class XMLHistoryParser:
             return False
 
     # ==========================================
-    # LECTURE DE L'HISTORIQUE (VUE LISTE)
+    # LECTURE DE L'HISTORIQUE (VUE LISTE & ANALYTICS)
     # ==========================================
     def get_all_sessions_history(self):
         import datetime
+        import os
+        import glob
+        import duckdb
+        import pandas as pd
+        
         search_pattern = os.path.join(self.log_directory, "imported_session_*.duckdb")
         files = glob.glob(search_pattern)
         history = []
@@ -176,9 +277,11 @@ class XMLHistoryParser:
             con = None
             try:
                 con = duckdb.connect(database=f, read_only=True)
+                
+                # --- NOUVEAU : On filtre STRICTEMENT sur "JOLY" pour ne pas voir les autres humains du serveur ---
                 query = """
-                    SELECT s.TrackVenue, s.SessionType, s.DurationMinutes, s.SessionDate,
-                           d.VehName, d.CarClass, d.BestLapTime, d.LapsCompleted, d.GridPos, d.ClassPosition
+                    SELECT s.TrackVenue, s.SessionType, s.DurationMinutes, s.SessionDate, s.FileID, s.FuelMult, s.TireMult,
+                           d.VehName, d.CarClass, d.BestLapTime, d.LapsCompleted, d.GridPos, d.ClassPosition, d.DriverName, d.isPlayer
                     FROM sessions s
                     JOIN session_drivers d ON s.FileID = d.FileID AND s.SessionType = d.SessionType
                     WHERE UPPER(d.DriverName) LIKE '%JOLY%'
@@ -188,23 +291,143 @@ class XMLHistoryParser:
                 if not df.empty:
                     for _, row in df.iterrows():
                         try:
-                            dt_obj = datetime.datetime.strptime(row['SessionDate'], "%Y/%m/%d %H:%M:%S")
+                            dt_obj = datetime.datetime.strptime(str(row['SessionDate']), "%Y/%m/%d %H:%M:%S")
                             date_str = dt_obj.strftime("%d %b %Y, %I:%M %p")
                         except:
-                            date_str = row['SessionDate']
+                            date_str = str(row['SessionDate'])
+                            
+                        # MULTIPLICATEURS SERVEUR (Pour normaliser la data en 1X)
+                        f_mult = float(row['FuelMult']) if pd.notna(row['FuelMult']) and row['FuelMult'] > 0 else 1.0
+                        t_mult = float(row['TireMult']) if pd.notna(row['TireMult']) and row['TireMult'] > 0 else 1.0
+
+                        wear_fl, wear_fr, wear_rl, wear_rr = 0.0, 0.0, 0.0, 0.0
+                        avg_fuel_used, avg_ve_used, avg_top_speed, max_top_speed = 0.0, 0.0, 0.0, 0.0
+                        starting_tire = "Medium"
                         
+                        laps_df = con.execute("""
+                            SELECT FrontTire, WearFL, WearFR, WearRL, WearRR, FuelUsed, VirtualEnergyUsed, TopSpeed, LapTime
+                            FROM laps 
+                            WHERE FileID=? AND UPPER(SessionType)=UPPER(?) AND DriverName=?
+                            ORDER BY Lap ASC
+                        """, [row['FileID'], row['SessionType'], row['DriverName']]).df()
+                        
+                        if not laps_df.empty:
+                            starting_tire = str(laps_df.iloc[0]['FrontTire'])
+                            
+                            # 1. CALCUL ULTRA-PRÉCIS DE L'USURE (Différence entre chaque tour)
+                            v_laps = laps_df[laps_df['LapTime'] > 0].copy()
+                            if len(v_laps) > 1:
+                                # On regarde combien de gomme a été perdue depuis le tour précédent
+                                v_laps['DropFL'] = -v_laps['WearFL'].diff()
+                                v_laps['DropFR'] = -v_laps['WearFR'].diff()
+                                v_laps['DropRL'] = -v_laps['WearRL'].diff()
+                                v_laps['DropRR'] = -v_laps['WearRR'].diff()
+                                
+                                # Filtre intelligent : On ignore les drops négatifs (arrêts aux stands) ou > 20% (bug LMU)
+                                valid_drops = v_laps[(v_laps['DropFL'] >= 0) & (v_laps['DropFL'] < 20)]
+                                if not valid_drops.empty:
+                                    wear_fl = float(valid_drops['DropFL'].mean()) / t_mult
+                                    wear_fr = float(valid_drops['DropFR'].mean()) / t_mult
+                                    wear_rl = float(valid_drops['DropRL'].mean()) / t_mult
+                                    wear_rr = float(valid_drops['DropRR'].mean()) / t_mult
+
+                            # 2. Conso et Vitesse
+                            v_fuel = laps_df[(laps_df['FuelUsed'] > 0) & (laps_df['LapTime'] > 0)]
+                            if not v_fuel.empty: avg_fuel_used = (float(v_fuel['FuelUsed'].mean()) * 100.0) / f_mult
+                            
+                            v_ve = laps_df[(laps_df['VirtualEnergyUsed'] > 0) & (laps_df['LapTime'] > 0)]
+                            if not v_ve.empty: avg_ve_used = float(v_ve['VirtualEnergyUsed'].mean()) / f_mult
+                            
+                            v_ts = laps_df[(laps_df['TopSpeed'] > 0) & (laps_df['LapTime'] > 0)]
+                            if not v_ts.empty:
+                                avg_top_speed = float(v_ts['TopSpeed'].mean())
+                                max_top_speed = float(v_ts['TopSpeed'].max())
+
+                        # --- EXTRACTION DE LA COMMUNAUTÉ ---
+                        comm_wear_fl, comm_wear_fr, comm_wear_rl, comm_wear_rr = 0.0, 0.0, 0.0, 0.0
+                        comm_avg_fuel, comm_avg_ve, comm_avg_ts, comm_max_ts = 0.0, 0.0, 0.0, 0.0
+                        comm_laps_total = 0
+
+                        # Usure mathématique parfaite de la communauté (Requête SQL Window Functions)
+                        comm_wear_query = """
+                            SELECT 
+                                AVG(DropFL) as AvgWearFL, AVG(DropFR) as AvgWearFR,
+                                AVG(DropRL) as AvgWearRL, AVG(DropRR) as AvgWearRR,
+                                COUNT(*) as CommLaps
+                            FROM (
+                                SELECT 
+                                    LAG(WearFL) OVER (PARTITION BY DriverName ORDER BY Lap) - WearFL as DropFL,
+                                    LAG(WearFR) OVER (PARTITION BY DriverName ORDER BY Lap) - WearFR as DropFR,
+                                    LAG(WearRL) OVER (PARTITION BY DriverName ORDER BY Lap) - WearRL as DropRL,
+                                    LAG(WearRR) OVER (PARTITION BY DriverName ORDER BY Lap) - WearRR as DropRR,
+                                    LapTime
+                                FROM laps
+                                WHERE FileID=? AND UPPER(SessionType)=UPPER(?) AND DriverName!=? AND CarClass=?
+                            )
+                            WHERE DropFL >= 0 AND DropFL < 20 AND LapTime > 0
+                        """
+                        comm_wear_df = con.execute(comm_wear_query, [row['FileID'], row['SessionType'], row['DriverName'], row['CarClass']]).df()
+                        
+                        if not comm_wear_df.empty and pd.notna(comm_wear_df['AvgWearFL'].iloc[0]):
+                            comm_laps_total = int(comm_wear_df['CommLaps'].iloc[0])
+                            # SÉCURITÉ : Vérifier que t_mult > 0 pour éviter la division par zéro !
+                            safe_t_mult = t_mult if t_mult > 0 else 1.0
+                            comm_wear_fl = float(comm_wear_df['AvgWearFL'].iloc[0]) / safe_t_mult
+                            comm_wear_fr = float(comm_wear_df['AvgWearFR'].iloc[0]) / safe_t_mult
+                            comm_wear_rl = float(comm_wear_df['AvgWearRL'].iloc[0]) / safe_t_mult
+                            comm_wear_rr = float(comm_wear_df['AvgWearRR'].iloc[0]) / safe_t_mult
+
+                        # Conso et Vitesse de la communauté
+                        comm_perf_query = """
+                            SELECT 
+                                AVG(CASE WHEN FuelUsed > 0 AND LapTime > 0 THEN FuelUsed ELSE NULL END) as AvgFuel,
+                                AVG(CASE WHEN VirtualEnergyUsed > 0 AND LapTime > 0 THEN VirtualEnergyUsed ELSE NULL END) as AvgVE,
+                                AVG(CASE WHEN TopSpeed > 0 AND LapTime > 0 THEN TopSpeed ELSE NULL END) as AvgTopSpeed,
+                                MAX(TopSpeed) as MaxTopSpeed
+                            FROM laps 
+                            WHERE FileID=? AND UPPER(SessionType)=UPPER(?) AND DriverName!=? AND CarClass=?
+                        """
+                        comm_perf_df = con.execute(comm_perf_query, [row['FileID'], row['SessionType'], row['DriverName'], row['CarClass']]).df()
+                        
+                        # SÉCURITÉ : Vérifier que f_mult > 0 pour éviter la division par zéro !
+                        safe_f_mult = f_mult if f_mult > 0 else 1.0
+
+                        if not comm_perf_df.empty:
+                            comm_avg_fuel = (float(comm_perf_df['AvgFuel'].dropna().mean()) * 100.0) / safe_f_mult if not comm_perf_df['AvgFuel'].dropna().empty else 0.0
+                            comm_avg_ve = float(comm_perf_df['AvgVE'].dropna().mean()) / safe_f_mult if not comm_perf_df['AvgVE'].dropna().empty else 0.0
+                            comm_avg_ts = float(comm_perf_df['AvgTopSpeed'].dropna().mean()) if not comm_perf_df['AvgTopSpeed'].dropna().empty else 0.0
+                            comm_max_ts = float(comm_perf_df['MaxTopSpeed'].dropna().max()) if not comm_perf_df['MaxTopSpeed'].dropna().empty else 0.0
+
                         history.append({
                             "track": row['TrackVenue'],
                             "car": row['VehName'],
                             "class": row['CarClass'],
                             "type": str(row['SessionType']).capitalize(),
-                            "grid": int(row['GridPos']),
-                            "finish": int(row['ClassPosition']),
-                            "laps": int(row['LapsCompleted']),
-                            "best": f"{int(row['BestLapTime']//60)}:{row['BestLapTime']%60:06.3f}" if row['BestLapTime'] > 0 else "--:--.---",
-                            "duration": int(row['DurationMinutes']),
+                            "grid": int(row['GridPos']) if pd.notna(row['GridPos']) else 0,
+                            "finish": int(row['ClassPosition']) if pd.notna(row['ClassPosition']) else 0,
+                            "laps": int(row['LapsCompleted']) if pd.notna(row['LapsCompleted']) else 0,
+                            "best": f"{int(row['BestLapTime']//60)}:{row['BestLapTime']%60:06.3f}" if pd.notna(row['BestLapTime']) and row['BestLapTime'] > 0 else "--:--.---",
+                            "duration": int(row['DurationMinutes']) if pd.notna(row['DurationMinutes']) else 0,
                             "date": date_str,
-                            "file": os.path.basename(f)
+                            "file": os.path.basename(f),
+                            "startingTires": starting_tire,
+                            "wearFL": wear_fl,
+                            "wearFR": wear_fr,
+                            "wearRL": wear_rl,
+                            "wearRR": wear_rr,
+                            "fuelUsed": avg_fuel_used,
+                            "veUsed": avg_ve_used,
+                            "topSpeed": avg_top_speed,
+                            "maxTopSpeed": max_top_speed,
+                            "commLaps": comm_laps_total,
+                            "commWearFL": comm_wear_fl,
+                            "commWearFR": comm_wear_fr,
+                            "commWearRL": comm_wear_rl,
+                            "commWearRR": comm_wear_rr,
+                            "commFuelUsed": comm_avg_fuel,
+                            "commVeUsed": comm_avg_ve,
+                            "commTopSpeed": comm_avg_ts,
+                            "commMaxTopSpeed": comm_max_ts
                         })
             except Exception:
                 pass
@@ -457,7 +680,8 @@ class XMLHistoryParser:
         if not os.path.exists(db_file): return None
         con = duckdb.connect(database=db_file, read_only=True)
         try:
-            df_player = con.execute("SELECT DriverName FROM session_drivers WHERE isPlayer = 1 AND FileID = (SELECT FileID FROM sessions LIMIT 1)").df()
+            # On cherche spécifiquement JOLY, car isPlayer=1 cible 30 humains en ligne
+            df_player = con.execute("SELECT DriverName FROM session_drivers WHERE UPPER(DriverName) LIKE '%JOLY%' AND FileID = (SELECT FileID FROM sessions LIMIT 1)").df()
             player_name = str(df_player.iloc[0]['DriverName']) if not df_player.empty else ""
 
             query = "SELECT DriverName, CarClass, Lap, LapTime, Sector1, Sector2, Sector3, Pit FROM laps WHERE UPPER(SessionType) = UPPER(?) AND LapTime > 0 ORDER BY Lap ASC"

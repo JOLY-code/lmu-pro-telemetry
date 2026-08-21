@@ -2217,6 +2217,64 @@ const getClassColor = (cls: string) => {
   }
 };
 
+// --- FONCTIONS DE CORRESPONDANCE INTELLIGENTE (XML <-> MENU) ---
+const isTrackMatch = (sessionTrack: string, targetTrack: string) => {
+  if (!sessionTrack || !targetTrack || targetTrack === 'Select track' || targetTrack === 'All') return true;
+  const sT = sessionTrack.toLowerCase();
+  const tT = targetTrack.toLowerCase();
+  return sT.includes(tT) || tT.includes(sT);
+};
+
+const isCarMatch = (sessionCar: string, sessionClass: string, targetCar: string) => {
+  if (!sessionCar || !targetCar || targetCar === 'Select car' || targetCar === 'All') return true;
+  const sC = sessionCar.toLowerCase();
+  const sClass = sessionClass ? sessionClass.toLowerCase() : '';
+  const tC = targetCar.toLowerCase();
+  
+  if (sC === tC || sC.includes(tC) || tC.includes(sC)) return true;
+
+  // Ferrari AF Corse : HYP vs GT3 vs GTE
+  if (tC.includes('499p') && sClass.includes('hyp') && (sC.includes('ferrari') || sC.includes('af corse'))) return true;
+  if (tC.includes('296') && sClass.includes('gt3') && (sC.includes('ferrari') || sC.includes('af corse'))) return true;
+  if (tC.includes('488') && sClass.includes('gte') && (sC.includes('ferrari') || sC.includes('af corse'))) return true;
+  
+  // Porsche Penske vs Manthey / 963 vs 911 vs RSR
+  if (tC.includes('963') && sClass.includes('hyp') && (sC.includes('porsche') || sC.includes('penske') || sC.includes('jota') || sC.includes('proton'))) return true;
+  if (tC.includes('911') && sClass.includes('gt') && (sC.includes('porsche') || sC.includes('manthey') || sC.includes('proton'))) return true;
+  if (tC.includes('rsr') && sClass.includes('gte') && sC.includes('porsche')) return true;
+  
+  // Aston Martin Valkyrie vs Vantage
+  if (tC.includes('valkyrie') && sClass.includes('hyp') && sC.includes('aston martin')) return true;
+  if (tC.includes('vantage') && sClass.includes('gt') && (sC.includes('aston martin') || sC.includes('heart of racing') || sC.includes('d\'station'))) return true;
+
+  // BMW M Hybrid vs M4
+  if (tC.includes('m hybrid') && sClass.includes('hyp') && (sC.includes('bmw') || sC.includes('wrt'))) return true;
+  if (tC.includes('m4') && sClass.includes('gt') && (sC.includes('bmw') || sC.includes('wrt'))) return true;
+
+  // Lamborghini SC63 vs Huracan
+  if (tC.includes('sc63') && sClass.includes('hyp') && (sC.includes('lamborghini') || sC.includes('iron lynx'))) return true;
+  if (tC.includes('huracán') && sClass.includes('gt') && (sC.includes('lamborghini') || sC.includes('iron lynx') || sC.includes('bovy'))) return true;
+  
+  // Chevrolet Corvette C8.R GTE vs Z06 GT3
+  if (tC.includes('z06') && sClass.includes('gt3') && (sC.includes('corvette') || sC.includes('chevrolet') || sC.includes('tf sport'))) return true;
+  if (tC.includes('c8.r') && sClass.includes('gte') && (sC.includes('corvette') || sC.includes('chevrolet'))) return true;
+
+  // Autres prototypes et GTE
+  if (tC.includes('gr010') && (sC.includes('toyota') || sC.includes('gazoo'))) return true;
+  if (tC.includes('9x8') && sC.includes('peugeot')) return true;
+  if (tC.includes('v-series') && (sC.includes('cadillac') || sC.includes('action express'))) return true;
+  if (tC.includes('a424') && sC.includes('alpine')) return true;
+  if (tC.includes('007') && sC.includes('glickenhaus')) return true;
+  if (tC.includes('tipo 6') && sC.includes('isotta')) return true;
+  if (tC.includes('680') && sC.includes('vanwall')) return true;
+  if (tC.includes('mustang') && (sC.includes('ford') || sC.includes('proton'))) return true;
+  if (tC.includes('720s') && (sC.includes('mclaren') || sC.includes('united'))) return true;
+  if (tC.includes('rc f') && (sC.includes('lexus') || sC.includes('akkodis'))) return true;
+  if (tC.includes('oreca 07') && sC.includes('oreca')) return true;
+
+  return false;
+};
+
 // =========================================================================
 // COMPOSANT PRINCIPAL ANALYTICS VIEW (Propre, sans espaces invisibles)
 // =========================================================================
@@ -2239,6 +2297,7 @@ const AnalyticsView = ({ setActiveMenu, setSelectedHistorySession }: any) => {
   const [selectedTrack, setSelectedTrack] = useState('Select track');
   const [selectedCar, setSelectedCar] = useState('Select car');
   const [activeMetric, setActiveMetric] = useState<'Tyre Wear' | 'Consumption' | 'Top Speed'>('Tyre Wear');
+  const [selectedCompound, setSelectedCompound] = useState('Medium');
   const [isNationDropdownOpen, setIsNationDropdownOpen] = useState(false);
 
   const TRACK_NATIONS = [
@@ -2279,29 +2338,205 @@ const AnalyticsView = ({ setActiveMenu, setSelectedHistorySession }: any) => {
 
   // --- ÉTATS DE DONNÉES DYNAMIQUES ---
   const [isLoading, setIsLoading] = useState(false);
+  const [calcState, setCalcState] = useState({ timeH: 1, timeM: 0, lapM: 1, lapS: 33, multi: 1, useComm: false });
   
   // L'unique structure globale qui connecte l'UI aux futures données de DuckDB
   const [stats, setStats] = useState({
     sessions: 0, wins: 0, podiums: 0, top5: 0, poles: 0, top3Starts: 0,
     avgFinish: 0.0, fastestLaps: 0, lapsLed: 0, lapsCompleted: 0,
     tracksPracticed: 0, combos: 0,
-    categoryBreakdown: [] as any[],
-    trackPerformance: [] as any[],
-    trackCarCombos: [] as any[],
-    topTracks: [] as any[],
-    trackProficiency: [] as any[],
+    categoryBreakdown: [] as any[], trackPerformance: [] as any[], trackCarCombos: [] as any[],
+    topTracks: [] as any[], trackProficiency: [] as any[],
     dnfIndicator: 0, dnfs: 0, dnfRate: 0.0, currentStreak: 0, highestStreak: 0,
-    // --- NOUVEAU : DONNÉES LAP TIMES ---
-    lapTimesData: {
-      totalValid: 0,
-      totalTracks: 0,
-      byType: { race: 0, qualy: 0, practice: 0 },
-      byMode: { online: 0, offline: 0 },
-      byCategory: [] as any[],
-      byTrack: [] as any[],
-      allSessions: [] as any[]
+    lapTimesData: { totalValid: 0, totalTracks: 0, byType: { race: 0, qualy: 0, practice: 0 }, byMode: { online: 0, offline: 0 }, byCategory: [] as any[], byTrack: [] as any[], allSessions: [] as any[] },
+    // --- DEEPER ANALYTICS (Séparé par gomme) ---
+    // Remplace uniquement le bloc deeperAnalytics dans "stats" par celui-ci :
+    deeperAnalytics: {
+      tyreWear: {
+        communityLaps: 0, playerLaps: 0,
+        compounds: {
+          soft: { laps: 0, fl: null as number|null, fr: null as number|null, rl: null as number|null, rr: null as number|null },
+          medium: { laps: 0, fl: null as number|null, fr: null as number|null, rl: null as number|null, rr: null as number|null },
+          hard: { laps: 0, fl: null as number|null, fr: null as number|null, rl: null as number|null, rr: null as number|null },
+          wet: { laps: 0, fl: null as number|null, fr: null as number|null, rl: null as number|null, rr: null as number|null }
+        },
+        comm: { fl: null as number|null, fr: null as number|null, rl: null as number|null, rr: null as number|null, axle: { f: null as number|null, r: null as number|null }, lat: { l: null as number|null, r: null as number|null } },
+        you: { fl: null as number|null, fr: null as number|null, rl: null as number|null, rr: null as number|null, axle: { f: null as number|null, r: null as number|null }, lat: { l: null as number|null, r: null as number|null } }
+      },
+      consumption: {
+        fuelYou: null as number|null, fuelComm: null as number|null,
+        veYou: null as number|null, veComm: null as number|null, tankCapacity: 110
+      },
+      topSpeed: {
+        avgYou: null as number|null, avgComm: null as number|null,
+        maxYou: null as number|null, maxComm: null as number|null,
+        trendData: [] as any[]
+      }
     }
   });
+
+  // --- SOUS-COMPOSANTS POUR DEEPER ANALYTICS (TYRE WEAR) ---
+  const TyreCard = ({ title, youVal, commVal }: any) => {
+    const hasYou = youVal !== null && youVal !== undefined && youVal > 0;
+    const hasComm = commVal !== null && commVal !== undefined && commVal > 0;
+    
+    let diff: number | null = null, status = '', colorClass = 'text-white', badgeClass = '';
+
+    if (hasYou && hasComm) {
+      diff = ((youVal - commVal) / commVal) * 100;
+      if (diff > 0) {
+        status = 'WORSE'; colorClass = 'text-[#ef4444]'; badgeClass = 'bg-[#ef4444]/10 border-[#ef4444]/30 text-[#ef4444]';
+      } else {
+        status = 'BETTER'; colorClass = 'text-[#10b981]'; badgeClass = 'bg-[#10b981]/10 border-[#10b981]/30 text-[#10b981]';
+      }
+    }
+
+    const youPos = hasYou ? Math.min(100, Math.max(0, (youVal / 3) * 100)) : 0;
+    const commPos = hasComm ? Math.min(100, Math.max(0, (commVal / 3) * 100)) : 50;
+
+    return (
+      <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-5 shadow-lg flex flex-col h-[170px]">
+        <span className="text-[10px] font-black tracking-widest text-gray-400 uppercase mb-4">{title}</span>
+        <div className="flex justify-between items-end mb-4">
+          <div className="flex flex-col">
+            <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1">You</span>
+            <span className={`text-3xl font-black ${colorClass}`}>{hasYou ? youVal.toFixed(3) : '—'}</span>
+            <span className="text-[9px] text-gray-500">% / Lap</span>
+          </div>
+          <div className="flex flex-col items-end text-right">
+            <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1">Community</span>
+            <span className="text-xl font-black text-gray-300">{hasComm ? commVal.toFixed(3) : '—'}</span>
+            <span className="text-[9px] text-gray-500">% / Lap</span>
+          </div>
+        </div>
+        
+        <div className="mt-auto relative w-full h-8 flex flex-col justify-center">
+           <div className="h-1 w-full bg-[#1c1e2b] rounded-full relative">
+              {hasComm && <div className="absolute w-2 h-2 rounded-full bg-gray-500 -top-0.5 transform -translate-x-1/2" style={{ left: `${commPos}%`}}></div>}
+              {hasYou && <div className={`absolute w-3 h-3 rounded-full -top-1 transform -translate-x-1/2 shadow-[0_0_10px_currentColor] ${hasComm && diff !== null && diff > 0 ? 'bg-[#ef4444]' : (hasComm ? 'bg-[#10b981]' : 'bg-[#3a86ff]')}`} style={{ left: `${youPos}%`}}></div>}
+           </div>
+           {hasYou && hasComm && diff !== null && (
+             <div className="absolute top-full left-1/2 transform -translate-x-1/2 mt-2 whitespace-nowrap">
+               <span className={`px-2 py-0.5 rounded-full border text-[8px] font-bold tracking-widest uppercase ${badgeClass}`}>
+                 {Math.abs(diff as number).toFixed(1)}% {status}
+               </span>
+             </div>
+           )}
+        </div>
+      </div>
+    );
+  }
+
+  // NOUVEAU COMPOSANT : Carte Statistique Générique (Conso / Vitesse)
+  const StatCard = ({ title, youVal, commVal, unit, lowerIsBetter = true, subLeft = '', subRight = '' }: any) => {
+    const hasYou = youVal !== null && youVal !== undefined && youVal > 0;
+    const hasComm = commVal !== null && commVal !== undefined && commVal > 0;
+    
+    let diff: number | null = null, status = '', colorClass = 'text-white', badgeClass = '';
+
+    if (hasYou && hasComm) {
+      diff = ((youVal - commVal) / commVal) * 100;
+      const isBetter = lowerIsBetter ? diff <= 0 : diff > 0;
+      if (!isBetter) {
+        status = 'WORSE'; colorClass = 'text-[#ef4444]'; badgeClass = 'bg-[#ef4444]/10 border-[#ef4444]/30 text-[#ef4444]';
+      } else {
+        status = 'BETTER'; colorClass = 'text-[#10b981]'; badgeClass = 'bg-[#10b981]/10 border-[#10b981]/30 text-[#10b981]';
+      }
+    }
+
+    const youPos = hasYou ? (lowerIsBetter ? Math.min(100, Math.max(0, 50 + (diff || 0))) : Math.min(100, Math.max(0, 50 - (diff || 0)))) : 0;
+    const commPos = 50;
+
+    return (
+      <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-5 shadow-lg flex flex-col h-[170px]">
+        <span className="text-[10px] font-black tracking-widest text-gray-400 uppercase mb-4">{title}</span>
+        <div className="flex justify-between items-end mb-2">
+          <div className="flex flex-col">
+            <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1">You</span>
+            <span className={`text-3xl font-black ${colorClass}`}>{hasYou ? youVal.toFixed(2) : '—'}</span>
+            <span className="text-[9px] text-gray-500">{unit}</span>
+            {subLeft && <span className="text-[10px] font-bold text-gray-400 mt-1">{subLeft}</span>}
+          </div>
+          <div className="flex flex-col items-end text-right">
+            <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-1">Community</span>
+            <span className="text-xl font-black text-gray-300">{hasComm ? commVal.toFixed(2) : '—'}</span>
+            <span className="text-[9px] text-gray-500">{unit}</span>
+            {subRight && <span className="text-[10px] font-bold text-gray-400 mt-1">{subRight}</span>}
+          </div>
+        </div>
+        
+        <div className="mt-auto relative w-full h-8 flex flex-col justify-center">
+           <div className="h-1 w-full bg-[#1c1e2b] rounded-full relative">
+              {hasComm && <div className="absolute w-2 h-2 rounded-full bg-gray-500 -top-0.5 transform -translate-x-1/2" style={{ left: `${commPos}%`}}></div>}
+              {hasYou && <div className={`absolute w-3 h-3 rounded-full -top-1 transform -translate-x-1/2 shadow-[0_0_10px_currentColor] ${hasComm && diff !== null && (lowerIsBetter ? diff > 0 : diff < 0) ? 'bg-[#ef4444]' : (hasComm ? 'bg-[#10b981]' : 'bg-[#3a86ff]')}`} style={{ left: `${youPos}%`}}></div>}
+           </div>
+           {hasYou && hasComm && diff !== null && (
+             <div className="absolute top-full left-1/2 transform -translate-x-1/2 mt-2 whitespace-nowrap">
+               <span className={`px-2 py-0.5 rounded-full border text-[8px] font-bold tracking-widest uppercase ${badgeClass}`}>
+                 {Math.abs(diff as number).toFixed(1)}% {status}
+               </span>
+             </div>
+           )}
+        </div>
+      </div>
+    );
+  }
+
+const BalanceBar = ({ title, leftLabel, rightLabel, youL, youR, commL, commR }: any) => {
+  const hasYou = youL !== null && youR !== null;
+  const hasComm = commL !== null && commR !== null;
+
+  const commPos = hasComm ? commL : 50;
+  const youPos = hasYou ? youL : 50;
+
+  let diff = null, dir = '';
+  if (hasYou && hasComm) {
+    diff = Math.abs(youL - commL);
+    dir = youL > commL ? leftLabel : rightLabel;
+  }
+
+  return (
+    <div className="flex flex-col mb-8 last:mb-0">
+      <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-4">{title} ({leftLabel} / {rightLabel})</span>
+      <div className="relative w-full h-8 flex flex-col justify-center mb-2 px-4">
+         <div className="flex justify-between text-[9px] font-bold text-gray-600 mb-2 w-full absolute -top-4 left-0 px-1"><span>{leftLabel}</span><span>{rightLabel}</span></div>
+         <div className="h-1 w-full bg-[#1c1e2b] rounded-full relative">
+            <div className="absolute left-1/2 top-0 bottom-0 w-px bg-gray-700 h-3 -mt-1 transform -translate-x-1/2"></div>
+            {hasComm && (
+              <div className="absolute flex flex-col items-center -top-3 transform -translate-x-1/2" style={{ left: `${commPos}%` }}>
+                <span className="text-[7px] font-bold text-gray-500 mb-0.5">COMM</span>
+                <div className="w-1.5 h-1.5 rounded-full bg-gray-500"></div>
+              </div>
+            )}
+            {hasYou && (
+              <div className="absolute flex flex-col items-center top-2 transform -translate-x-1/2" style={{ left: `${youPos}%` }}>
+                <div className="w-2.5 h-2.5 rounded-full bg-[#3a86ff] shadow-[0_0_8px_#3a86ff]"></div>
+                <span className="text-[7px] font-bold text-[#3a86ff] mt-0.5">YOU {hasComm ? '+ COMM' : ''}</span>
+              </div>
+            )}
+         </div>
+      </div>
+      <div className="flex justify-between items-end mt-4">
+         <div className="flex flex-col">
+           <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-0.5">You</span>
+           <span className="text-sm font-black text-white">{hasYou ? `${youL.toFixed(1)}% / ${youR.toFixed(1)}%` : '—'}</span>
+           <span className="text-[8px] text-gray-500">{leftLabel} / {rightLabel}</span>
+         </div>
+         <div className="flex flex-col items-end">
+           <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-0.5">Community</span>
+           <span className="text-xs font-black text-gray-300">{hasComm ? `${commL.toFixed(1)}% / ${commR.toFixed(1)}%` : '—'}</span>
+         </div>
+      </div>
+      {hasYou && hasComm && diff !== null && (
+        <div className="text-center mt-2">
+          <span className="text-[8px] font-bold tracking-widest uppercase text-gray-400 border border-gray-700 bg-[#1a1b26] px-2 py-0.5 rounded-full">
+            {diff.toFixed(1)}% TOWARD {dir} VS COMMUNITY
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
 
   // --- MOTEUR DE CALCUL DYNAMIQUE (Basé sur l'historique XML existant) ---
   useEffect(() => {
@@ -2425,7 +2660,135 @@ const AnalyticsView = ({ setActiveMenu, setSelectedHistorySession }: any) => {
             tMap.overallBest = Math.min(tMap.overallBest, secs);
           });
 
-          // 4. Assemblage final et mathématiques (Moyennes, Ecart Types)
+          // --- 4. CALCULS SPÉCIFIQUES POUR "DEEPER ANALYTICS" (TYRE WEAR) ---
+          const deeperTarget = filtered.filter((s:any) => isTrackMatch(s.track, selectedTrack) && isCarMatch(s.car, s.class, selectedCar));
+          
+          const compStats = {
+            soft: { laps: 0, fl: 0, fr: 0, rl: 0, rr: 0 },
+            medium: { laps: 0, fl: 0, fr: 0, rl: 0, rr: 0 },
+            hard: { laps: 0, fl: 0, fr: 0, rl: 0, rr: 0 },
+            wet: { laps: 0, fl: 0, fr: 0, rl: 0, rr: 0 }
+          };
+
+          let totalDeeperLaps = 0;
+          let dCommLaps = 0;
+          let sumCommFL = 0, sumCommFR = 0, sumCommRL = 0, sumCommRR = 0;
+
+          let sumFuelYou=0, sumVeYou=0, sumTopSpeedYou=0, maxTopSpeedYou=0;
+          let fuelLapsYou=0, veLapsYou=0, tsLapsYou=0;
+          let sumFuelComm=0, sumVeComm=0, sumTopSpeedComm=0, maxTopSpeedComm=0;
+          let fuelLapsComm=0, veLapsComm=0, tsLapsComm=0;
+          const trendDataMap = new Map();
+
+          deeperTarget.forEach((s: any) => {
+             const laps = parseInt(s.laps) || 0;
+             const cLaps = parseInt(s.commLaps) || 0;
+
+             // Calcul du Joueur
+             if (laps > 0) {
+               totalDeeperLaps += laps;
+               let comp = (s.startingTires || 'Medium').toLowerCase();
+               if (!compStats[comp as keyof typeof compStats]) comp = 'medium';
+               
+               const c = compStats[comp as keyof typeof compStats];
+               c.laps += laps;
+               
+               if (s.wearFL !== undefined && s.wearFL !== null) { 
+                 c.fl += parseFloat(s.wearFL) * laps; c.fr += parseFloat(s.wearFR) * laps;
+                 c.rl += parseFloat(s.wearRL) * laps; c.rr += parseFloat(s.wearRR) * laps;
+               }
+               
+               // Normalisation stricte : on saute les 0 pour ne pas casser la moyenne !
+               const fU = parseFloat(s.fuelUsed);
+               if (!isNaN(fU) && fU > 0) { sumFuelYou += fU * laps; fuelLapsYou += laps; }
+               
+               const vU = parseFloat(s.veUsed);
+               if (!isNaN(vU) && vU > 0) { sumVeYou += vU * laps; veLapsYou += laps; }
+               
+               const ts = parseFloat(s.topSpeed);
+               if (!isNaN(ts) && ts > 0) { 
+                 sumTopSpeedYou += ts * laps; tsLapsYou += laps; 
+                 const mts = parseFloat(s.maxTopSpeed);
+                 if (!isNaN(mts) && mts > maxTopSpeedYou) maxTopSpeedYou = mts;
+               }
+               
+               // Graphe de vitesse
+               const mTS = parseFloat(s.maxTopSpeed);
+               const cMTS = parseFloat(s.commMaxTopSpeed);
+               if ((!isNaN(mTS) && mTS > 0) || (!isNaN(cMTS) && cMTS > 0)) {
+                  const dStr = s.date ? s.date.split(',')[0] : 'Unknown';
+                  if (!trendDataMap.has(dStr)) {
+                      trendDataMap.set(dStr, { date: dStr, you: !isNaN(mTS) && mTS > 0 ? mTS : null, comm: !isNaN(cMTS) && cMTS > 0 ? cMTS : null });
+                  } else {
+                      const ex = trendDataMap.get(dStr);
+                      if (!isNaN(mTS) && mTS > (ex.you || 0)) ex.you = mTS;
+                      if (!isNaN(cMTS) && cMTS > (ex.comm || 0)) ex.comm = cMTS;
+                  }
+               }
+             }
+
+             // Calcul de la Communauté
+             if (cLaps > 0) {
+               dCommLaps += cLaps;
+               if (s.commWearFL !== undefined && s.commWearFL !== null) { 
+                 sumCommFL += parseFloat(s.commWearFL) * cLaps; sumCommFR += parseFloat(s.commWearFR) * cLaps;
+                 sumCommRL += parseFloat(s.commWearRL) * cLaps; sumCommRR += parseFloat(s.commWearRR) * cLaps;
+               }
+               
+               const cfU = parseFloat(s.commFuelUsed);
+               if (!isNaN(cfU) && cfU > 0) { sumFuelComm += cfU * cLaps; fuelLapsComm += cLaps; }
+               
+               const cvU = parseFloat(s.commVeUsed);
+               if (!isNaN(cvU) && cvU > 0) { sumVeComm += cvU * cLaps; veLapsComm += cLaps; }
+               
+               const cts = parseFloat(s.commTopSpeed);
+               if (!isNaN(cts) && cts > 0) { 
+                 sumTopSpeedComm += cts * cLaps; tsLapsComm += cLaps;
+                 const cmts = parseFloat(s.commMaxTopSpeed);
+                 if (!isNaN(cmts) && cmts > maxTopSpeedComm) maxTopSpeedComm = cmts;
+               }
+             }
+          });
+
+          // Résolution Finale
+          let tankCap = 110;
+          if (selectedCarDetails?.category?.includes('HYPER')) tankCap = 90;
+          else if (selectedCarDetails?.category?.includes('LMP2')) tankCap = 75;
+          else if (selectedCarDetails?.category?.includes('LMP3')) tankCap = 100;
+
+          // Normalisation des moyennes d'usure Joueur (% par tour)
+          Object.keys(compStats).forEach(k => {
+             const c = compStats[k as keyof typeof compStats] as any;
+             if (c.laps > 0 && c.fl > 0) {
+               c.fl = c.fl / c.laps;
+               c.fr = c.fr / c.laps;
+               c.rl = c.rl / c.laps;
+               c.rr = c.rr / c.laps;
+             } else {
+               c.fl = null; c.fr = null; c.rl = null; c.rr = null;
+             }
+          });
+
+          // Normalisation des moyennes Communauté
+          const commFL = (dCommLaps > 0 && sumCommFL > 0) ? (sumCommFL / dCommLaps) : null;
+          const commFR = (dCommLaps > 0 && sumCommFR > 0) ? (sumCommFR / dCommLaps) : null;
+          const commRL = (dCommLaps > 0 && sumCommRL > 0) ? (sumCommRL / dCommLaps) : null;
+          const commRR = (dCommLaps > 0 && sumCommRR > 0) ? (sumCommRR / dCommLaps) : null;
+
+          let commAxleF = null, commAxleR = null, commLatL = null, commLatR = null;
+          if (commFL !== null && commFR !== null && commRL !== null && commRR !== null) {
+            const totF = commFL + commFR;
+            const totR = commRL + commRR;
+            const totW = totF + totR;
+            if (totW > 0) {
+              commAxleF = (totF / totW) * 100;
+              commAxleR = (totR / totW) * 100;
+              commLatL = ((commFL + commRL) / totW) * 100;
+              commLatR = ((commFR + commRR) / totW) * 100;
+            }
+          }
+
+          // 5. Assemblage final et mathématiques (Moyennes, Ecart Types)
           const sessionsCount = filtered.length;
           
           const trackPerf = Array.from(trackMap.values()).map((t: any) => ({
@@ -2443,7 +2806,6 @@ const AnalyticsView = ({ setActiveMenu, setSelectedHistorySession }: any) => {
             avgPos: c.races > 0 ? ((c.totalFinish + c.totalQual) / (c.races * 2)) : 0
           }));
 
-          // CALCUL DES MOYENNES ET DE LA CONSTANCE POUR LE GRAPHIQUE
           const byTrackData = Array.from(ltTrackMap.values()).map((t: any) => {
             const validSecs = t.sessionList.map((s:any) => timeToSecs(s.best)).filter((sec:number) => sec !== Infinity);
             const pb = Math.min(...validSecs);
@@ -2478,7 +2840,7 @@ const AnalyticsView = ({ setActiveMenu, setSelectedHistorySession }: any) => {
             };
           });
 
-          // 5. UN SEUL setStats Global
+          // 6. UN SEUL setStats Global (Fini les doublons !)
           setStats({
             sessions: sessionsCount, wins, podiums, top5, poles, top3Starts,
             avgFinish: sessionsCount > 0 ? (totalFinish / sessionsCount) : 0,
@@ -2497,6 +2859,11 @@ const AnalyticsView = ({ setActiveMenu, setSelectedHistorySession }: any) => {
               })),
               byTrack: byTrackData,
               allSessions: validLapSessions.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime())
+            },
+            deeperAnalytics: { 
+              tyreWear: { communityLaps: dCommLaps, playerLaps: totalDeeperLaps, compounds: compStats, comm: { fl: commFL, fr: commFR, rl: commRL, rr: commRR, axle: { f: commAxleF, r: commAxleR }, lat: { l: commLatL, r: commLatR } }, you: { fl: null, fr: null, rl: null, rr: null, axle: { f: null, r: null }, lat: { l: null, r: null } } },
+              consumption: { fuelYou: fuelLapsYou > 0 ? sumFuelYou / fuelLapsYou : null, fuelComm: fuelLapsComm > 0 ? sumFuelComm / fuelLapsComm : null, veYou: veLapsYou > 0 ? sumVeYou / veLapsYou : null, veComm: veLapsComm > 0 ? sumVeComm / veLapsComm : null, tankCapacity: tankCap },
+              topSpeed: { avgYou: tsLapsYou > 0 ? sumTopSpeedYou / tsLapsYou : null, avgComm: tsLapsComm > 0 ? sumTopSpeedComm / tsLapsComm : null, maxYou: maxTopSpeedYou > 0 ? maxTopSpeedYou : null, maxComm: maxTopSpeedComm > 0 ? maxTopSpeedComm : null, trendData: Array.from(trendDataMap.values()).reverse() }
             }
           });
         }
@@ -2507,7 +2874,7 @@ const AnalyticsView = ({ setActiveMenu, setSelectedHistorySession }: any) => {
       });
 
     return () => { isMounted = false; };
-  }, [activeMode, activeType, category, selectedTrack, selectedCar]);
+  }, [activeMode, activeType, category, selectedTrack, selectedCar]); // Recalcule à chaque clic sur un filtre !
 
   return (
     <div className="flex-1 flex flex-col h-full bg-[#09090b] text-gray-200 rounded-xl overflow-hidden shadow-2xl border border-gray-800/50">
@@ -2973,54 +3340,257 @@ const AnalyticsView = ({ setActiveMenu, setSelectedHistorySession }: any) => {
 
         {/* === TAB 2 : DEEPER ANALYTICS === */}
         {activeTab === 'Deeper' && (
-          <div className="flex flex-col gap-6 h-full">
-            {/* Metrics Sub-Nav */}
-            <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-1 flex shadow-md">
-              <button 
-                onClick={() => setActiveMetric('Tyre Wear')}
-                className={`flex-1 flex justify-center items-center gap-2 py-2 rounded-lg text-sm font-bold transition-colors ${activeMetric === 'Tyre Wear' ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}
-              >
-                <Gauge size={16} /> Tyre Wear
-              </button>
-              <button 
-                onClick={() => setActiveMetric('Consumption')}
-                className={`flex-1 flex justify-center items-center gap-2 py-2 rounded-lg text-sm font-bold transition-colors ${activeMetric === 'Consumption' ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}
-              >
-                <Droplet size={16} /> Consumption
-              </button>
-              <button 
-                onClick={() => setActiveMetric('Top Speed')}
-                className={`flex-1 flex justify-center items-center gap-2 py-2 rounded-lg text-sm font-bold transition-colors ${activeMetric === 'Top Speed' ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}
-              >
-                <Zap size={16} /> Top Speed
-              </button>
+          <div className="flex flex-col gap-6 h-full animate-in fade-in duration-300">
+            
+            {/* NOUVEAUX FILTRES VISIBLES (TRACK ET CAR) */}
+            <div className="flex items-center gap-6 pb-2 border-b border-gray-800/50">
+              {/* Select Track Custom */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500 font-semibold">Track:</span>
+                <div className="relative z-50">
+                  <div onClick={() => setIsTrackDropdownOpen(!isTrackDropdownOpen)} className="bg-[#121318] border border-gray-800/80 text-xs font-bold text-gray-200 px-4 py-2 rounded-md cursor-pointer hover:bg-white/5 transition-colors min-w-[220px] flex items-center justify-between shadow-sm">
+                    <div className="flex items-center gap-2 truncate pr-2">
+                      {selectedTrack === 'Select track' ? <span>🌍 Select track</span> : (
+                        <><div className="flex-shrink-0"><CountryFlag code={getTrackCountryCode(selectedTrack)} /></div><span className="truncate">{selectedTrack}</span></>
+                      )}
+                    </div>
+                    <ChevronDown size={14} className={`shrink-0 text-gray-500 transform transition-transform ${isTrackDropdownOpen ? 'rotate-180' : ''}`} />
+                  </div>
+                  {isTrackDropdownOpen && (
+                    <>
+                      <div className="fixed inset-0" onClick={() => setIsTrackDropdownOpen(false)}></div>
+                      <div className="absolute top-full mt-2 left-0 w-[320px] max-h-64 overflow-y-auto bg-[#121318] border border-gray-800 rounded-md shadow-2xl scrollbar-hide">
+                        <div onClick={() => { setSelectedTrack('Select track'); setIsTrackDropdownOpen(false); }} className="p-3 hover:bg-gray-800 cursor-pointer text-xs font-bold text-gray-400 border-b border-gray-800/50">🌍 Select track</div>
+                        {LMU_ALL_TRACKS.map(t => (
+                          <div key={t.name} onClick={() => { setSelectedTrack(t.name); setIsTrackDropdownOpen(false); }} className="p-3 hover:bg-[#1a1b26] cursor-pointer flex items-center gap-3 border-b border-gray-800/30 last:border-0 transition-colors">
+                            <div className="flex-shrink-0"><CountryFlag code={getTrackCountryCode(t.name)} /></div>
+                            <span className="text-xs font-bold text-gray-200 truncate">{t.name}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Select Car Custom */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500 font-semibold">Car:</span>
+                <div className="relative z-50">
+                  <div onClick={() => setIsCarDropdownOpen(!isCarDropdownOpen)} className="bg-[#121318] border border-gray-800/80 text-xs font-bold text-gray-200 px-4 py-2 rounded-md cursor-pointer hover:bg-white/5 transition-colors min-w-[240px] flex items-center justify-between shadow-sm">
+                    <div className="flex items-center gap-3 truncate pr-2">
+                      {selectedCar === 'Select car' ? <span>🏎️ Select car</span> : (
+                        <><div className="w-5 flex justify-center shrink-0"><img src={BRAND_LOGOS[LMU_CARS[selectedCar]?.brand]} alt="" className="max-h-4" /></div><span className="truncate">{selectedCar}</span></>
+                      )}
+                    </div>
+                    <ChevronDown size={14} className={`shrink-0 text-gray-500 transform transition-transform ${isCarDropdownOpen ? 'rotate-180' : ''}`} />
+                  </div>
+                  {isCarDropdownOpen && (
+                    <>
+                      <div className="fixed inset-0" onClick={() => setIsCarDropdownOpen(false)}></div>
+                      <div className="absolute top-full mt-2 left-0 w-[350px] max-h-64 overflow-y-auto bg-[#121318] border border-gray-800 rounded-md shadow-2xl scrollbar-hide">
+                        <div onClick={() => { setSelectedCar('Select car'); setIsCarDropdownOpen(false); }} className="p-3 hover:bg-gray-800 cursor-pointer text-xs font-bold text-gray-400 border-b border-gray-800/50">🏎️ Select car</div>
+                        {availableCars.map(c => (
+                          <div key={c} onClick={() => { setSelectedCar(c); setIsCarDropdownOpen(false); }} className="p-3 hover:bg-[#1a1b26] cursor-pointer flex items-center gap-4 border-b border-gray-800/30 last:border-0 transition-colors">
+                            <div className="w-6 h-6 bg-white/5 rounded flex justify-center p-1"><img src={BRAND_LOGOS[LMU_CARS[c]?.brand]} className="max-h-full" /></div>
+                            <span className="text-xs font-bold text-gray-200 truncate">{c}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
             </div>
 
-            {/* Display Area / Selected Car Technical Card */}
+            {/* Metrics Sub-Nav */}
+            <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-1 flex shadow-md shrink-0">
+              <button onClick={() => setActiveMetric('Tyre Wear')} className={`flex-1 flex justify-center items-center gap-2 py-2 rounded-lg text-sm font-bold transition-colors ${activeMetric === 'Tyre Wear' ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}><Gauge size={16} /> Tyre Wear</button>
+              <button onClick={() => setActiveMetric('Consumption')} className={`flex-1 flex justify-center items-center gap-2 py-2 rounded-lg text-sm font-bold transition-colors ${activeMetric === 'Consumption' ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}><Droplet size={16} /> Consumption</button>
+              <button onClick={() => setActiveMetric('Top Speed')} className={`flex-1 flex justify-center items-center gap-2 py-2 rounded-lg text-sm font-bold transition-colors ${activeMetric === 'Top Speed' ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-gray-200'}`}><Zap size={16} /> Top Speed</button>
+            </div>
+
             {selectedCar !== 'Select car' && selectedTrack !== 'Select track' ? (
-              <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-6 flex flex-col gap-4 animate-in fade-in">
-                <div className="flex justify-between items-center border-b border-gray-800/50 pb-4">
-                  <div>
-                    <span className="text-[10px] font-bold tracking-widest text-[#3a86ff] uppercase">{selectedCarDetails?.category}</span>
-                    <h3 className="text-2xl font-black text-white">{selectedCar}</h3>
-                    <span className="text-xs text-gray-400 font-medium">Layout: {selectedCarDetails?.layout}</span>
+              <div className="flex flex-col gap-6 pb-10">
+                {/* Context Bar */}
+                <div className="bg-[#121318] border border-gray-800/50 rounded-xl px-5 py-3 flex items-center shadow-sm text-[10px] font-bold tracking-widest uppercase text-gray-400">
+                  <div className="flex items-center gap-3">
+                    <BarChart2 size={14} className="text-gray-500" />
+                    <CountryFlag code={getTrackCountryCode(selectedTrack)} />
+                    <span className="text-white">{selectedTrack}</span>
+                    <span className="opacity-40">•</span>
+                    <CarFront size={12} className="text-gray-500" />
+                    <span className="text-white">{selectedCar}</span>
+                    <span className="opacity-40">•</span>
+                    <span>{activeType}</span>
+                    <span className="opacity-40">•</span>
+                    <span>{activeMode}</span>
+                    <span className="opacity-40">•</span>
+                    <span>Sample Size: <span className="text-white">{stats.deeperAnalytics.tyreWear.communityLaps} laps</span></span>
+                    <span className="opacity-40">•</span>
+                    <span>Your Data: <span className="text-white">{stats.deeperAnalytics.tyreWear.compounds[selectedCompound.toLowerCase() as 'soft'|'medium'|'hard'|'wet'].laps} laps</span></span>
                   </div>
-                  <div className="text-right">
-                    <span className="text-[10px] font-bold tracking-widest text-gray-500 uppercase">Target Circuit</span>
-                    <h4 className="text-lg font-bold text-gray-200">{selectedTrack}</h4>
-                  </div>
+                  <div className="ml-auto"><Info size={14} className="text-gray-500 cursor-pointer hover:text-white transition-colors" /></div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4 mt-2">
-                  <div className="bg-[#181924] p-4 rounded-lg border border-gray-800/50">
-                    <span className="text-[10px] font-bold tracking-widest text-emerald-400 uppercase">Car Strengths</span>
-                    <p className="text-xs text-gray-300 mt-1">{selectedCarDetails?.trait}</p>
-                  </div>
-                  <div className="bg-[#181924] p-4 rounded-lg border border-gray-800/50">
-                    <span className="text-[10px] font-bold tracking-widest text-red-400 uppercase">Known Weakness</span>
-                    <p className="text-xs text-gray-300 mt-1">{selectedCarDetails?.weakness}</p>
-                  </div>
-                </div>
+                {/* --- SOUS-VUES DE DEEPER ANALYTICS --- */}
+                
+                {/* 1. TYRE WEAR */}
+                {activeMetric === 'Tyre Wear' && (() => {
+                  const compData = stats.deeperAnalytics.tyreWear.compounds[selectedCompound.toLowerCase() as 'soft'|'medium'|'hard'|'wet'];
+                  const commData = stats.deeperAnalytics.tyreWear.comm;
+                  let axleF = null, axleR = null, latL = null, latR = null;
+                  if (compData.fl !== null && compData.fr !== null && compData.rl !== null && compData.rr !== null) {
+                    const totF = compData.fl + compData.fr; const totR = compData.rl + compData.rr; const totW = totF + totR;
+                    if (totW > 0) { axleF = (totF / totW) * 100; axleR = (totR / totW) * 100; latL = ((compData.fl + compData.rl) / totW) * 100; latR = ((compData.fr + compData.rr) / totW) * 100; }
+                  }
+                  return (
+                    <div className="flex flex-col gap-6 animate-in fade-in">
+                      {/* Compound Selector Intégré */}
+                      <div className="flex items-center gap-6 border-b border-gray-800/50 pb-2">
+                        <span className="text-[10px] font-black tracking-widest text-gray-500 uppercase">Tyre Compound</span>
+                        <div className="flex gap-4">
+                          {['Soft', 'Medium', 'Hard', 'Wet'].map(comp => {
+                            const l = stats.deeperAnalytics.tyreWear.compounds[comp.toLowerCase() as 'soft'|'medium'|'hard'|'wet'].laps;
+                            const isAct = selectedCompound === comp;
+                            const colors = { Soft: 'bg-[#ef4444]', Medium: 'bg-[#e9c46a]', Hard: 'bg-white', Wet: 'bg-[#3a86ff]' };
+                            return (
+                              <button key={comp} onClick={() => setSelectedCompound(comp)} className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-all ${isAct ? 'bg-[#1a1b26] text-white border border-gray-700' : 'text-gray-500 hover:text-gray-300'}`}>
+                                <div className={`w-2.5 h-2.5 rounded-full ${colors[comp as keyof typeof colors]} ${isAct ? 'shadow-[0_0_8px_currentColor]' : 'opacity-50'}`}></div>
+                                {comp.toUpperCase()} <span className="text-[9px] text-gray-600">({l})</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-6">
+                        <div className="flex flex-col gap-6"><TyreCard title="Front Left" youVal={compData.fl} commVal={commData.fl} /><TyreCard title="Rear Left" youVal={compData.rl} commVal={commData.rl} /></div>
+                        <div className="flex flex-col gap-6"><TyreCard title="Front Right" youVal={compData.fr} commVal={commData.fr} /><TyreCard title="Rear Right" youVal={compData.rr} commVal={commData.rr} /></div>
+                        <div className="flex flex-col h-full"><div className="bg-[#121318] border border-gray-800/50 rounded-xl p-5 shadow-lg flex flex-col flex-1"><span className="text-[10px] font-black tracking-widest text-gray-400 uppercase mb-8">Handling Balance</span><div className="flex flex-col justify-center flex-1 gap-12"><BalanceBar title="Axle Balance" leftLabel="F" rightLabel="R" youL={axleF} youR={axleR} commL={commData.axle.f} commR={commData.axle.r} /><BalanceBar title="Lateral Balance" leftLabel="L" rightLabel="R" youL={latL} youR={latR} commL={commData.lat.l} commR={commData.lat.r} /></div></div></div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* 2. CONSUMPTION & FUEL CALCULATOR */}
+                {activeMetric === 'Consumption' && (() => {
+                  const cons = stats.deeperAnalytics.consumption;
+                  const youLiters = cons.fuelYou ? (cons.fuelYou * cons.tankCapacity / 100).toFixed(1) : '--';
+                  const commLiters = cons.fuelComm ? (cons.fuelComm * cons.tankCapacity / 100).toFixed(1) : '--';
+                  
+                  // Mathématiques du Calculateur
+                  const totalRaceSecs = (calcState.timeH * 3600) + (calcState.timeM * 60);
+                  const lapSecs = (calcState.lapM * 60) + calcState.lapS;
+                  const totalLaps = lapSecs > 0 ? Math.ceil(totalRaceSecs / lapSecs) : 0;
+                  
+                  const targetFuelPct = calcState.useComm ? cons.fuelComm : cons.fuelYou;
+                  const targetVePct = calcState.useComm ? cons.veComm : cons.veYou;
+                  
+                  // Le multiplicateur (1X, 2X...) s'applique ici nativement !
+                  const fuelPerLapLiters = targetFuelPct ? (targetFuelPct * cons.tankCapacity / 100) * calcState.multi : 0;
+                  const energyPerLapPct = targetVePct ? targetVePct * calcState.multi : 0;
+                  
+                  const totalFuelNeeded = fuelPerLapLiters * totalLaps;
+                  const totalEnergyNeeded = energyPerLapPct * totalLaps;
+                  const stints = fuelPerLapLiters > 0 ? Math.ceil(totalFuelNeeded / cons.tankCapacity) : 0;
+                  const lapsPerStint = fuelPerLapLiters > 0 ? Math.floor(cons.tankCapacity / fuelPerLapLiters) : 0;
+
+                  return (
+                    <div className="flex flex-col gap-6 animate-in fade-in">
+                      <div className="grid grid-cols-2 gap-6">
+                        <StatCard title="Fuel" youVal={cons.fuelYou} commVal={cons.fuelComm} unit="% / Lap" subLeft={`EST. VOLUME: ${youLiters} L / lap`} subRight={`EST. VOLUME: ${commLiters} L / lap`} />
+                        <StatCard title="Energy" youVal={cons.veYou} commVal={cons.veComm} unit="% / Lap" subLeft="Average virtual energy consumption." />
+                      </div>
+                      
+                      {/* Fuel Calculator Panel */}
+                      <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-6 shadow-lg">
+                        <div className="flex justify-between items-center mb-6">
+                          <h3 className="text-[10px] font-black tracking-widest text-gray-400 uppercase">Fuel Calculator</h3>
+                          <div className="flex bg-[#0a0a0f] border border-gray-800 rounded-full p-1 text-[9px] font-bold">
+                            <button onClick={() => setCalcState({...calcState, useComm: false})} className={`px-4 py-1.5 rounded-full ${!calcState.useComm ? 'bg-white text-black' : 'text-gray-500'}`}>YOUR AVG</button>
+                            <button onClick={() => setCalcState({...calcState, useComm: true})} className={`px-4 py-1.5 rounded-full ${calcState.useComm ? 'bg-white text-black' : 'text-gray-500'}`}>COMMUNITY</button>
+                          </div>
+                        </div>
+                        <p className="text-xs text-gray-500 mb-8">Estimate race strategy based on benchmarks and car class limits.</p>
+                        
+                        <div className="grid grid-cols-12 gap-8">
+                          {/* Inputs */}
+                          <div className="col-span-5 grid grid-cols-2 gap-x-4 gap-y-6">
+                            <div className="flex flex-col"><span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-2">Total Race Time</span><div className="flex gap-2"><input type="number" value={calcState.timeH} onChange={e=>setCalcState({...calcState, timeH: +e.target.value})} className="w-full bg-[#1a1b26] border border-gray-800 rounded px-3 py-2 text-white text-sm" /><input type="number" value={calcState.timeM} onChange={e=>setCalcState({...calcState, timeM: +e.target.value})} className="w-full bg-[#1a1b26] border border-gray-800 rounded px-3 py-2 text-white text-sm" /></div></div>
+                            <div className="flex flex-col"><span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-2">Average Laptime</span><div className="flex gap-2"><input type="number" value={calcState.lapM} onChange={e=>setCalcState({...calcState, lapM: +e.target.value})} className="w-full bg-[#1a1b26] border border-gray-800 rounded px-3 py-2 text-white text-sm" /><input type="number" value={calcState.lapS} onChange={e=>setCalcState({...calcState, lapS: +e.target.value})} className="w-full bg-[#1a1b26] border border-gray-800 rounded px-3 py-2 text-white text-sm" /></div></div>
+                            <div className="flex flex-col"><span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-2">Fuel Per Lap (L)</span><input type="text" disabled value={fuelPerLapLiters.toFixed(2)} className="bg-[#1a1b26] border border-gray-800 rounded px-3 py-2 text-gray-400 text-sm" /></div>
+                            <div className="flex flex-col"><span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-2">Tank Capacity (L)</span><input type="number" value={cons.tankCapacity} disabled className="bg-[#1a1b26] border border-gray-800 rounded px-3 py-2 text-gray-400 text-sm" /></div>
+                            <div className="flex flex-col"><span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest mb-2">Energy Per Lap (%)</span><input type="text" disabled value={energyPerLapPct.toFixed(2)} className="bg-[#1a1b26] border border-gray-800 rounded px-3 py-2 text-gray-400 text-sm" /></div>
+                            <div className="flex flex-col justify-end pb-2">
+                               <select value={calcState.multi} onChange={e=>setCalcState({...calcState, multi: +e.target.value})} className="bg-[#1a1b26] border border-gray-800 rounded px-3 py-2 text-white text-sm outline-none"><option value={1}>1X CONSUMPTION</option><option value={2}>2X CONSUMPTION</option><option value={3}>3X CONSUMPTION</option></select>
+                            </div>
+                          </div>
+                          
+                          {/* Output Grid */}
+                          <div className="col-span-7 flex flex-col justify-center">
+                             <div className="grid grid-cols-4 text-center border-b border-gray-800 pb-4 mb-4">
+                                <div className="text-[9px] font-bold text-gray-600 uppercase tracking-widest"></div>
+                                <div className="text-[9px] font-bold text-gray-500 uppercase tracking-widest">Total</div>
+                                <div className="text-[9px] font-bold text-gray-500 uppercase tracking-widest">Per Stint</div>
+                                <div className="text-[9px] font-bold text-gray-500 uppercase tracking-widest">Stints</div>
+                             </div>
+                             <div className="grid grid-cols-4 text-center items-center mb-6">
+                                <div className="text-[9px] font-bold text-gray-500 uppercase tracking-widest text-left pl-4">Lap Details</div>
+                                <div className="text-xl font-black text-white">{totalLaps}</div>
+                                <div className="text-xl font-black text-white">{lapsPerStint}</div>
+                                <div className="text-xl font-black text-white">{stints}</div>
+                             </div>
+                             <div className="grid grid-cols-4 text-center items-center mb-6">
+                                <div className="text-[9px] font-bold text-gray-500 uppercase tracking-widest text-left pl-4">Fuel (L)</div>
+                                <div className="text-xl font-black text-[#3a86ff]">{totalFuelNeeded.toFixed(1)}</div>
+                                <div className="text-xl font-black text-[#3a86ff]">{(lapsPerStint * fuelPerLapLiters).toFixed(1)}</div>
+                                <div className="text-xl font-black text-[#3a86ff]">-</div>
+                             </div>
+                             <div className="grid grid-cols-4 text-center items-center">
+                                <div className="text-[9px] font-bold text-gray-500 uppercase tracking-widest text-left pl-4">Energy (%)</div>
+                                <div className="text-xl font-black text-[#3a86ff]">{totalEnergyNeeded.toFixed(0)}</div>
+                                <div className="text-xl font-black text-[#3a86ff]">{(lapsPerStint * energyPerLapPct).toFixed(0)}</div>
+                                <div className="text-xl font-black text-[#3a86ff]">-</div>
+                             </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* 3. TOP SPEED */}
+                {activeMetric === 'Top Speed' && (() => {
+                  const spd = stats.deeperAnalytics.topSpeed;
+                  return (
+                    <div className="flex flex-col gap-6 animate-in fade-in">
+                      <div className="grid grid-cols-2 gap-6">
+                        <StatCard title="Avg. Max Speed" youVal={spd.avgYou} commVal={spd.avgComm} unit="km/h" lowerIsBetter={false} subLeft="Average maximum speed achieved across all laps." />
+                        <StatCard title="Session Max" youVal={spd.maxYou} commVal={spd.maxComm} unit="km/h" lowerIsBetter={false} />
+                      </div>
+                      
+                      {/* Graphe des VMax */}
+                      <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-6 shadow-lg h-[300px] flex flex-col">
+                        <span className="text-[10px] font-black tracking-widest text-gray-400 uppercase mb-2">Weekly Performance Trend</span>
+                        <p className="text-[9px] text-gray-500 uppercase tracking-widest mb-6">Community speed growth over time for this track/car combination.</p>
+                        <div className="flex-1 w-full">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <RechartsLine data={spd.trendData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
+                              <XAxis dataKey="date" stroke="#4b5563" tick={{fill: '#6b7280', fontSize: 9}} tickLine={false} axisLine={false} />
+                              <YAxis domain={['dataMin - 2', 'dataMax + 2']} stroke="#4b5563" tick={{fill: '#6b7280', fontSize: 9}} tickLine={false} axisLine={false} />
+                              <RechartsTooltip contentStyle={{backgroundColor: '#121318', border: '1px solid #1f2937', borderRadius: '8px'}} itemStyle={{color: '#fff', fontSize: '12px', fontWeight: 'bold'}} />
+                              <Line type="monotone" dataKey="you" name="You" stroke="#3a86ff" strokeWidth={2} dot={{ r: 3, fill: '#121318', strokeWidth: 2 }} activeDot={{ r: 5 }} />
+                              <Line type="monotone" dataKey="comm" name="Community" stroke="#ef4444" strokeWidth={2} dot={{ r: 3, fill: '#121318', strokeWidth: 2 }} activeDot={{ r: 5 }} />
+                            </RechartsLine>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
               </div>
             ) : (
               <div className="flex-1 bg-[#121318] border border-gray-800/50 rounded-xl flex flex-col items-center justify-center min-h-[400px]">
