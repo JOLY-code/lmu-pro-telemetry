@@ -438,6 +438,13 @@ def get_online_schedule():
         print(f"[API ERROR] Scraping: {e}")
         return {"status": "error", "message": str(e)}
 
+
+@app.get("/api/setups/apply")
+def apply_setup(track: str):
+    sm = LMU_SetupManager(setups_directory=".")
+    sm.export_optimized_setup(track_name=track)
+    return {"status": "success"}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

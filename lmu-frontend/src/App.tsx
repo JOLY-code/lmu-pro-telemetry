@@ -1,24 +1,29 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   LayoutDashboard, LineChart, Wrench, Trophy, UserCircle, HelpCircle, 
-  CloudRain, Thermometer, MapPin, CarFront, CalendarDays, FileText, BarChart2, Compass, Timer
+  CloudRain, Thermometer, MapPin, CarFront, CalendarDays, FileText, 
+  BarChart2, Compass, Timer, Activity
 } from 'lucide-react';
 
+// --- IMPORTS DES VUES SÉPARÉES ---
 import DashboardView from './views/DashboardView';
 import ScheduleView from './views/ScheduleView';
 import SetupView from './views/SetupView';
 import SessionsHistoryView from './views/SessionsHistoryView';
 import AnalyticsView from './views/AnalyticsView';
 import SessionDetailView from './views/SessionDetailView';
-import { DataView, DrivingView, TimingView } from './views/TelemetryViews';
-
-
-
-
+import { 
+  DataView, 
+  DrivingView, 
+  TimingView, 
+  TelemetryOverview, 
+  TelemetryPitWall, 
+  TelemetryLiveSetup 
+} from './views/TelemetryViews';
 
 export default function App() {
   const [activeMenu, setActiveMenu] = useState('Sessions');
-  const [subView, setSubView] = useState<'driving' | 'data' | 'timing'>('data');
+  const [subView, setSubView] = useState<'overview' | 'driving' | 'pitwall' | 'setup' | 'timing' | 'data'>('overview');
   const [selectedHistorySession, setSelectedHistorySession] = useState<any | null>(null); // NOUVEAU
   
   // =========================================================================
@@ -208,13 +213,19 @@ export default function App() {
         {/* ROUTING DES VUES (Injection des props) */}
         <div className="flex-1 flex overflow-hidden">
           
-          {activeMenu === 'Sessions' && (
-            <div className="w-16 bg-[#1c1e2b] border-r border-gray-800 flex flex-col items-center py-6 gap-6">
-              <button onClick={() => setSubView('driving')} className={`p-3 rounded-xl transition-all ${subView === 'driving' ? 'bg-[#3a86ff] text-white shadow-[0_0_15px_rgba(58,134,255,0.4)]' : 'text-[#a0a3b5] hover:bg-gray-800'}`}><Compass size={22} /></button>
-              <button onClick={() => setSubView('timing')} className={`p-3 rounded-xl transition-all ${subView === 'timing' ? 'bg-[#3a86ff] text-white shadow-[0_0_15px_rgba(58,134,255,0.4)]' : 'text-[#a0a3b5] hover:bg-gray-800'}`}><Timer size={22} /></button>
-              <button onClick={() => setSubView('data')} className={`p-3 rounded-xl transition-all ${subView === 'data' ? 'bg-[#3a86ff] text-white shadow-[0_0_15px_rgba(58,134,255,0.4)]' : 'text-[#a0a3b5] hover:bg-gray-800'}`}><BarChart2 size={22} /></button>
+          {/* BARRE LATÉRALE DE LA TÉLÉMÉTRIE */}
+          {activeMenu === 'Telemetry' && (
+            <div className="w-16 bg-[#1c1e2b] border-r border-gray-800 flex flex-col items-center py-6 gap-6 z-50 shadow-[10px_0_20px_rgba(0,0,0,0.2)]">
+              <button onClick={() => setSubView('overview')} className={`p-3 rounded-xl transition-all ${subView === 'overview' ? 'bg-[#3a86ff] text-white shadow-[0_0_15px_rgba(58,134,255,0.4)]' : 'text-[#a0a3b5] hover:bg-gray-800'}`} title="Overview"><LayoutDashboard size={22} /></button>
+              <button onClick={() => setSubView('driving')} className={`p-3 rounded-xl transition-all ${subView === 'driving' ? 'bg-[#3a86ff] text-white shadow-[0_0_15px_rgba(58,134,255,0.4)]' : 'text-[#a0a3b5] hover:bg-gray-800'}`} title="Track Map"><Compass size={22} /></button>
+              <button onClick={() => setSubView('pitwall')} className={`p-3 rounded-xl transition-all ${subView === 'pitwall' ? 'bg-[#3a86ff] text-white shadow-[0_0_15px_rgba(58,134,255,0.4)]' : 'text-[#a0a3b5] hover:bg-gray-800'}`} title="Pit Wall"><Activity size={22} /></button>
+              <button onClick={() => setSubView('setup')} className={`p-3 rounded-xl transition-all ${subView === 'setup' ? 'bg-[#3a86ff] text-white shadow-[0_0_15px_rgba(58,134,255,0.4)]' : 'text-[#a0a3b5] hover:bg-gray-800'}`} title="Live Setup"><Wrench size={22} /></button>
+              <div className="w-8 h-[1px] bg-gray-700 my-2"></div>
+              <button onClick={() => setSubView('timing')} className={`p-3 rounded-xl transition-all ${subView === 'timing' ? 'bg-[#3a86ff] text-white shadow-[0_0_15px_rgba(58,134,255,0.4)]' : 'text-[#a0a3b5] hover:bg-gray-800'}`} title="Timing"><Timer size={22} /></button>
+              <button onClick={() => setSubView('data')} className={`p-3 rounded-xl transition-all ${subView === 'data' ? 'bg-[#3a86ff] text-white shadow-[0_0_15px_rgba(58,134,255,0.4)]' : 'text-[#a0a3b5] hover:bg-gray-800'}`} title="Data Analysis"><BarChart2 size={22} /></button>
             </div>
           )}
+
           <div className="flex-1 p-6 overflow-hidden flex gap-6">
             {activeMenu === 'Dashboard' ? (
               <DashboardView setActiveMenu={setActiveMenu} />
@@ -235,15 +246,24 @@ export default function App() {
                 <SessionsHistoryView onSelectSession={setSelectedHistorySession} /> 
               )
             ) : activeMenu === 'Telemetry' ? (
-              subView === 'driving' ? (
+              
+              /* LE ROUTING DE LA TÉLÉMÉTRIE */
+              subView === 'overview' ? (
+                <TelemetryOverview laps={lapsData} liveData={liveData} />
+              ) : subView === 'driving' ? (
                 <DrivingView laps={lapsData} historicalData={historicalData} liveData={liveData} /> 
+              ) : subView === 'pitwall' ? (
+                <TelemetryPitWall laps={lapsData} liveData={liveData} />
+              ) : subView === 'setup' ? (
+                <TelemetryLiveSetup liveData={liveData} />
               ) : subView === 'timing' ? (
                 <TimingView laps={lapsData} liveData={liveData} />
               ) : (
                 <DataView laps={lapsData} historicalData={historicalData} liveData={liveData} />
               )
+
             ) : activeMenu === 'Setups' ? (
-              <SetupView currentSetup={aiSetup} aiReport={aiReport} />
+              <SetupView currentSetup={aiSetup} aiReport={aiReport} sessionInfo={sessionInfo} />
             ) : (
               <div className="flex-1 bg-[#212332] rounded-xl border border-gray-800 flex items-center justify-center text-[#a0a3b5] font-bold">
                 Module {activeMenu} is under construction...

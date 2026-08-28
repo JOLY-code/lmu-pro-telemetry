@@ -318,7 +318,11 @@ class RaceEngineerLogic:
                     self.sm.modify_parameter('CONTROLS', 'RearBrakeSetting', delta=+1)
                 elif avg_slip_fl > -0.05:
                     self.log("Diagnostic Pilotage : Sous-exploitation du grip au freinage (Roues synchronisées avec la piste).")
-                    self.log("Conseil : Tu peux freiner 15 à 20 mètres plus tard sans bloquer.")
+                    if heavy_braking['Brake'].max() > 95:
+                        self.log("Action : Tu écrases la pédale à 100% sans bloquer. Augmentation de la force max (Max Pedal Force).")
+                        self.sm.modify_parameter('CONTROLS', 'BrakePressureSetting', delta=+1)
+                    else:
+                        self.log("Conseil : Tu peux freiner 15 à 20 mètres plus tard et appuyer plus fort.")
 
     def _analyze_driver_traces(self, df):
         """
@@ -550,7 +554,10 @@ class RaceEngineerLogic:
         elif race_duration_minutes <= 60:
             self.log("Mode SPRINT : Fermeture des radiateurs et écopes (Gain de VMax).")
             self.sm.modify_parameter('BODYAERO', 'WaterRadiatorSetting', delta=-1, limit_min=2)
-            self.sm.modify_parameter('BODYAERO', 'BrakeDuctSetting', delta=-1, limit_min=1)
+            self.sm.modify_parameter('FRONTLEFT', 'BrakeDuctSetting', delta=-1, limit_min=1)
+            self.sm.modify_parameter('FRONTRIGHT', 'BrakeDuctSetting', delta=-1, limit_min=1)
+            self.sm.modify_parameter('REARLEFT', 'BrakeDuctSetting', delta=-1, limit_min=1)
+            self.sm.modify_parameter('REARRIGHT', 'BrakeDuctSetting', delta=-1, limit_min=1)
         else:
             self.log("Mode ENDURANCE : Ouverture du refroidissement et sécurisation du fond plat.")
             self.sm.modify_parameter('BODYAERO', 'WaterRadiatorSetting', delta=+1, limit_max=5)
@@ -634,10 +641,10 @@ class RaceEngineerLogic:
                 self.log("Diagnostic (Électronique) : L'ABS s'active excessivement sur tes gros freinages.")
                 self._tweak(
                     section='CONTROLS', 
-                    key='RearBrakeSetting', 
-                    delta=+1, 
-                    advice_fixed="L'ABS sature à l'avant. Recule ta répartition de freinage (Brake Bias) via la molette du volant.",
-                    is_incar_setting=True # AUTORISÉ EN FIXED
+                    key='ABSSetting', 
+                    delta=-1, 
+                    advice_fixed="L'ABS sature à l'avant. Baisse le niveau d'ABS au volant ou recule ton Brake Bias.",
+                    is_incar_setting=True 
                 )
                 
         # --- 2. VÉHICULES SANS ABS (Lock-ups purs) ---
@@ -739,8 +746,12 @@ class RaceEngineerLogic:
             
             if min_front_rh < 0.015: # Moins de 15mm du sol
                 self.log("Diagnostic : La planche frotte violemment le sol à haute vitesse (Bottoming).")
-                self._tweak('FRONTLEFT', 'RideHeightSetting', +1, "La voiture frotte au sol à haute vitesse. Essaie de soulager dans les grandes courbes bosselées.", is_incar_setting=False)
+                self._tweak('FRONTLEFT', 'RideHeightSetting', +1, "La voiture frotte au sol à haute vitesse.", is_incar_setting=False)
                 self._tweak('FRONTRIGHT', 'RideHeightSetting', +1, "", is_incar_setting=False)
+                
+                # NOUVEAU : On durcit la compression rapide du 3ème amortisseur pour limiter l'écrasement aéro !
+                self.log("Action secondaire : Durcissement du 3ème amortisseur avant (Fast Bump) pour soutenir la plateforme aéro.")
+                self.sm.modify_parameter('FRONTTHIRD', 'FastBumpSetting', delta=+1)
                 
             avg_rake = avg_data['RearRideHeight'] - avg_data['FrontRideHeight']
             if avg_rake < 0.010: # Moins de 10mm de Rake
@@ -907,7 +918,8 @@ class RaceEngineerLogic:
                 max_brake_temp = df['BrakeTempFL'].max()
                 if max_brake_temp > 600:
                     self.log("Action (Urgent) : Surchauffe critique des freins détectée. Ouverture des écopes de freins (Brake Ducts).")
-                    self.sm.modify_parameter('BODYAERO', 'BrakeDuctSetting', delta=+1)
+                    self.sm.modify_parameter('FRONTLEFT', 'BrakeDuctSetting', delta=+1)
+                    self.sm.modify_parameter('FRONTRIGHT', 'BrakeDuctSetting', delta=+1)
 
     def _analyze_lmp3_specifics(self, df):
         """Analyse comportementale ciblée pour la catégorie LMP3."""
@@ -955,6 +967,10 @@ class RaceEngineerLogic:
                     self.log("Action : Augmentation de la hauteur de caisse statique à l'arrière.")
                     self.sm.modify_parameter('REARLEFT', 'RideHeightSetting', delta=+1)
                     self.sm.modify_parameter('REARRIGHT', 'RideHeightSetting', delta=+1)
+                    
+                    # NOUVEAU : On empêche l'arrière de s'écraser avec le 3ème amortisseur
+                    self.log("Action secondaire : Durcissement du 3ème amortisseur arrière (Fast Bump) pour empêcher l'écrasement.")
+                    self.sm.modify_parameter('REARTHIRD', 'FastBumpSetting', delta=+1)
 
         if 'TireTempFL_O' in df.columns and 'TireTempFR_O' in df.columns and 'LatAccel' in df.columns:
             heavy_lateral = df[abs(df['LatAccel']) > 2.0]
@@ -1105,11 +1121,17 @@ class RaceEngineerLogic:
             if max_brake_front > hot_threshold:
                 self.log(f"🚨 DANGER FREINS : Disques avant en surchauffe ({max_brake_front:.0f}°C). Risque de 'Brake Fade' (pédale molle).")
                 self.log("Action : Ouverture des écopes de freins avant (Front Brake Ducts).")
-                self.sm.modify_parameter('BODYAERO', 'BrakeDuctSetting', delta=+1, limit_max=6)
+                self.sm.modify_parameter('FRONTLEFT', 'BrakeDuctSetting', delta=+1, limit_max=6)
+                self.sm.modify_parameter('FRONTRIGHT', 'BrakeDuctSetting', delta=+1, limit_max=6)
+                self.log("Action secondaire : Augmentation de l'épaisseur des disques avant (Brake Disc) pour absorber plus de chaleur.")
+                self.sm.modify_parameter('FRONTLEFT', 'BrakeDiscSetting', delta=+1)
+                self.sm.modify_parameter('FRONTRIGHT', 'BrakeDiscSetting', delta=+1)
+                
             elif min_brake_front > 0 and max_brake_front < cold_threshold:
                 self.log(f"Diagnostic : Freins avant trop froids ({max_brake_front:.0f}°C max). Manque de mordant initial.")
-                self.log("Action : Fermeture des écopes de freins. Améliore la VMax et aide à chauffer les pneus avant.")
-                self.sm.modify_parameter('BODYAERO', 'BrakeDuctSetting', delta=-1, limit_min=1)
+                self.log("Action : Fermeture des écopes de freins et/ou réduction de l'épaisseur des disques pour gagner du poids.")
+                self.sm.modify_parameter('FRONTLEFT', 'BrakeDuctSetting', delta=-1, limit_min=1)
+                self.sm.modify_parameter('FRONTRIGHT', 'BrakeDuctSetting', delta=-1, limit_min=1)
 
 
     def _analyze_endurance_brakes(self, df, race_duration_minutes):

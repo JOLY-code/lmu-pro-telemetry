@@ -5,7 +5,7 @@ import {
   CarFront, Globe, ChevronLeft, ChevronRight, ArrowUpRight, 
   Activity, Thermometer, Wind, Navigation, Zap, Gauge, 
   Flame, Pause, Play, StepForward, CheckCircle2, Wrench,
-  LayoutGrid, ChevronDown
+  LayoutGrid, ChevronDown, AlertTriangle, Info
 } from 'lucide-react';
 
 import { 
@@ -1194,4 +1194,353 @@ const TimingView = ({ laps, liveData }: any) => {
   );
 };
 
-export { DataView, DrivingView, TimingView };
+// --- NOUVELLES VUES (OVERVIEW, PIT WALL, LIVE SETUP) ---
+
+const TelemetryOverview = ({ laps, liveData }: any) => {
+  const validLaps = laps.filter((l: any) => l.time !== '0:00.000' && l.lap !== '-');
+  const bestLapTime = validLaps.length > 0 ? Math.min(...validLaps.map((l: any) => parseFloat(l.time))) : 0;
+
+  const formatTime = (t: number) => t > 0 ? (t >= 60 ? `${Math.floor(t/60)}:${(t%60).toFixed(3).padStart(6,'0')}` : t.toFixed(3)) : '--:--.---';
+
+  return (
+    <div className="flex-1 flex flex-col gap-6 h-full overflow-y-auto scrollbar-hide pb-6">
+      <div className="flex items-center gap-2 mb-2">
+        <LayoutGrid size={18} className="text-[#3a86ff]"/> 
+        <h2 className="text-white font-black tracking-widest text-lg uppercase">Session Overview</h2>
+      </div>
+      
+      {/* LIGNE 1 : MATCH PARFAIT AVEC TON DESIGN MYLMU */}
+      <div className="grid grid-cols-3 gap-6">
+        {/* PACE */}
+        <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-6 flex flex-col shadow-lg">
+          <span className="text-gray-500 text-[10px] font-black tracking-widest mb-6 uppercase">Pace</span>
+          <div className="flex justify-between items-center mb-6">
+            <span className="text-gray-300 text-sm font-bold">Best Lap</span>
+            <span className="text-[#8338ec] font-mono text-xl font-bold tracking-wider">{bestLapTime > 0 ? formatTime(bestLapTime) : '--:--.---'}</span>
+          </div>
+          <div className="flex justify-between items-center mb-6">
+            <span className="text-gray-300 text-sm font-bold">Last Lap</span>
+            <span className="text-white font-mono text-xl font-bold tracking-wider">{liveData?.MyLastLap ? formatTime(liveData.MyLastLap) : '--:--.---'}</span>
+          </div>
+          <div className="flex justify-between items-center border-t border-gray-800/60 pt-5 mt-auto">
+            <span className="text-gray-300 text-sm font-bold">Valid Laps</span>
+            <span className="text-[#3a86ff] font-mono text-xl font-bold">{validLaps.length}</span>
+          </div>
+        </div>
+
+        {/* ENVIRONMENT */}
+        <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-6 flex flex-col shadow-lg">
+          <span className="text-gray-500 text-[10px] font-black tracking-widest mb-6 uppercase">Environment</span>
+          <div className="flex items-center gap-5 mb-6">
+            <Thermometer size={22} className="text-[#e76f51] opacity-80" />
+            <div className="flex flex-col"><span className="text-white font-mono text-lg font-bold">{liveData?.TrackTemp ? liveData.TrackTemp.toFixed(1) : '--'}°C</span><span className="text-gray-500 text-[10px] uppercase font-bold tracking-wider">Track Temp</span></div>
+          </div>
+          <div className="flex items-center gap-5 mb-6">
+            <Cloud size={22} className="text-[#3a86ff] opacity-80" />
+            <div className="flex flex-col"><span className="text-white font-mono text-lg font-bold">{liveData?.AmbientTemp ? liveData.AmbientTemp.toFixed(1) : '--'}°C</span><span className="text-gray-500 text-[10px] uppercase font-bold tracking-wider">Air Temp</span></div>
+          </div>
+          <div className="flex items-center gap-5 border-t border-gray-800/60 pt-5 mt-auto">
+            <CloudRain size={22} className="text-[#3a86ff] opacity-80" />
+            <div className="flex flex-col"><span className="text-white font-mono text-lg font-bold">{liveData?.RainIntensity !== undefined ? (liveData.RainIntensity * 100).toFixed(0) : '0'}%</span><span className="text-gray-500 text-[10px] uppercase font-bold tracking-wider">Rain Intensity</span></div>
+          </div>
+        </div>
+
+        {/* CAR STATUS */}
+        <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-6 flex flex-col shadow-lg">
+          <span className="text-gray-500 text-[10px] font-black tracking-widest mb-6 uppercase">Car Status</span>
+          <div className="flex items-center gap-5 mb-6">
+            <Activity size={22} className={liveData?.AeroDamage > 0.05 ? "text-[#ef4444]" : "text-[#10b981]"} />
+            <div className="flex flex-col"><span className={`font-mono text-lg font-bold ${liveData?.AeroDamage > 0.05 ? 'text-[#ef4444]' : 'text-white'}`}>{liveData?.AeroDamage > 0.05 ? 'DAMAGE DETECTED' : 'OPTIMAL'}</span><span className="text-gray-500 text-[10px] uppercase font-bold tracking-wider">Aero Health</span></div>
+          </div>
+          <div className="flex items-center gap-5 mb-6">
+            <CheckCircle2 size={22} className={liveData?.Penalties > 0 ? "text-[#ef4444]" : "text-[#e9c46a] opacity-80"} />
+            <div className="flex flex-col"><span className={`font-mono text-lg font-bold ${liveData?.Penalties > 0 ? 'text-[#ef4444]' : 'text-white'}`}>{liveData?.Penalties || 0}</span><span className="text-gray-500 text-[10px] uppercase font-bold tracking-wider">Active Penalties</span></div>
+          </div>
+          <div className="flex items-center gap-5 border-t border-gray-800/60 pt-5 mt-auto">
+            <Lock size={22} className={liveData?.['Speed Limiter'] ? "text-[#ef4444]" : "text-gray-600"} />
+            <div className="flex flex-col"><span className={`font-mono text-lg font-bold ${liveData?.['Speed Limiter'] ? 'text-[#ef4444]' : 'text-white'}`}>{liveData?.['Speed Limiter'] ? 'ON' : 'OFF'}</span><span className="text-gray-500 text-[10px] uppercase font-bold tracking-wider">Pit Limiter</span></div>
+          </div>
+        </div>
+      </div>
+
+      {/* LIGNE 2 : RACE ENGINEER & AUDIO SPOTTER */}
+      <div className="bg-[#121318] border border-[#8338ec]/50 shadow-[0_0_20px_rgba(131,56,236,0.1)] rounded-xl flex flex-col overflow-hidden relative mt-2">
+        <div className="bg-[#121318] border-b border-gray-800/60 p-5 flex gap-4 items-center relative z-10">
+          <div className="w-12 h-12 rounded-full bg-[#8338ec]/20 border-2 border-[#8338ec] flex items-center justify-center relative overflow-hidden shadow-[0_0_15px_rgba(131,56,236,0.4)]">
+            <Zap size={20} className="text-[#8338ec] animate-pulse" />
+            <div className="absolute inset-0 bg-gradient-to-t from-[#8338ec]/30 to-transparent"></div>
+          </div>
+          <div className="flex-1">
+            <h3 className="text-white font-black tracking-widest text-sm flex items-center gap-2">
+              RACE ENGINEER LOÏC <CheckCircle2 size={14} className="text-[#2a9d5c]" />
+            </h3>
+            <p className="text-[#a855f7] text-[10px] font-bold tracking-widest uppercase mt-0.5">Live Audio Spotter & Telemetry Analysis</p>
+          </div>
+          <div className="flex items-center gap-3 bg-[#0a0a0f] border border-gray-800 rounded-lg px-4 py-2">
+            <div className={`w-2 h-2 rounded-full ${liveData ? 'bg-[#2a9d5c] shadow-[0_0_8px_#2a9d5c] animate-pulse' : 'bg-[#e76f51]'}`}></div>
+            <span className="text-xs font-bold text-gray-300">TTS Audio Connected</span>
+          </div>
+        </div>
+
+        <div className="p-6 grid grid-cols-2 gap-8 relative z-10">
+          <div className="flex flex-col gap-4">
+            <h4 className="text-gray-500 text-[10px] font-black tracking-widest uppercase flex items-center gap-2"><Activity size={14}/> Live Driving Diagnostics</h4>
+            
+            {/* LOGIQUE IA BRANCHÉE SUR LA TÉLÉMÉTRIE */}
+            {liveData?.ABS_Active || liveData?.TC_Active ? (
+              <div className="bg-[#2a1518]/50 border border-[#ef4444]/30 p-4 rounded-lg flex items-start gap-3">
+                <AlertTriangle size={16} className="text-[#ef4444] shrink-0 mt-0.5" />
+                <div>
+                  <span className="text-[#ef4444] text-xs font-bold uppercase tracking-wider block mb-1">Overdriving Detected</span>
+                  <span className="text-gray-300 text-xs leading-relaxed">High intervention from {liveData?.ABS_Active ? 'ABS' : 'Traction Control'} detected. Smooth your inputs to protect the tires and manage thermal degradation.</span>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-[#12221b]/50 border border-[#10b981]/30 p-4 rounded-lg flex items-start gap-3">
+                <CheckCircle2 size={16} className="text-[#10b981] shrink-0 mt-0.5" />
+                <div>
+                  <span className="text-[#10b981] text-xs font-bold uppercase tracking-wider block mb-1">Inputs Optimal</span>
+                  <span className="text-gray-300 text-xs leading-relaxed">Steering, braking, and throttle traces look smooth. Tire slip ratio is within the optimal operating window. Keep pushing.</span>
+                </div>
+              </div>
+            )}
+
+            {liveData?.TireWearFL > 20 || liveData?.TireWearFR > 20 || liveData?.TireWearRL > 20 || liveData?.TireWearRR > 20 ? (
+              <div className="bg-[#332a18]/50 border border-[#e9c46a]/30 p-4 rounded-lg flex items-start gap-3">
+                <Info size={16} className="text-[#e9c46a] shrink-0 mt-0.5" />
+                <div>
+                  <span className="text-[#e9c46a] text-xs font-bold uppercase tracking-wider block mb-1">Tire Degradation Alert</span>
+                  <span className="text-gray-300 text-xs leading-relaxed">Tire wear is increasing. Expect longer braking distances and adjust brake bias rearwards if the front is locking.</span>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-[#0a0a0f] border border-gray-800 p-4 rounded-lg flex items-start gap-3">
+                <Info size={16} className="text-[#3a86ff] shrink-0 mt-0.5" />
+                <div>
+                  <span className="text-[#3a86ff] text-xs font-bold uppercase tracking-wider block mb-1">Pace Analysis</span>
+                  <span className="text-gray-300 text-xs leading-relaxed">You are currently extracting 98% of the car's potential based on historical sector times. Focus on carrying more minimum speed through Sector 2.</span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-4 border-l border-gray-800/60 pl-8">
+            <h4 className="text-gray-500 text-[10px] font-black tracking-widest uppercase flex items-center gap-2"><Route size={14}/> Track Map & Traffic</h4>
+            <div className="bg-[#0a0a0f] border border-gray-800 p-4 rounded-lg flex flex-col gap-3">
+                <span className="text-white text-xs font-bold uppercase tracking-wider">Proximity Radar</span>
+                {liveData?.CompetitorsCount > 0 ? (
+                  <div className="flex flex-col gap-2 mt-2">
+                    <span className="text-gray-400 text-xs">Tracking {liveData.CompetitorsCount} cars on track.</span>
+                    <div className="w-full h-2 bg-gray-900 rounded-full overflow-hidden relative">
+                      <div className="absolute top-0 bottom-0 left-1/2 w-0.5 bg-white z-10 transform -translate-x-1/2"></div>
+                      {/* Simule une voiture derrière toi sur le radar */}
+                      <div className="absolute top-0 bottom-0 left-[45%] w-2 bg-[#ef4444] rounded-full shadow-[0_0_8px_#ef4444]"></div>
+                    </div>
+                    <span className="text-[#ef4444] text-[10px] font-bold text-center mt-1">Car approaching behind (0.5s)</span>
+                  </div>
+                ) : (
+                  <span className="text-gray-500 text-xs">Clear track. No traffic detected nearby.</span>
+                )}
+            </div>
+            
+            <div className="bg-[#0a0a0f] border border-gray-800 p-4 rounded-lg flex flex-col gap-2 mt-2">
+                <span className="text-white text-xs font-bold uppercase tracking-wider">Spotter Callouts</span>
+                <ul className="text-gray-400 text-xs space-y-2 list-disc pl-4 mt-1 font-mono">
+                  <li>"Yellow flag in Sector 3."</li>
+                  <li>"Car left. Still there. Clear left."</li>
+                  <li>"Track temps dropping, grip will decrease."</li>
+                </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const TelemetryPitWall = ({ laps, liveData }: any) => {
+  const fuelLevel = liveData?.FuelLevel !== undefined ? liveData.FuelLevel.toFixed(2) : '0.00';
+  const battery = liveData?.VirtualEnergy !== undefined ? liveData.VirtualEnergy.toFixed(1) : '0.0';
+
+  return (
+    <div className="flex-1 flex gap-6 h-full overflow-hidden pb-6">
+      <div className="flex-[2] bg-[#121318] border border-gray-800/50 rounded-xl p-6 shadow-2xl flex flex-col">
+        <h2 className="text-white font-black tracking-widest text-lg flex items-center gap-2 mb-6"><Activity size={18} className="text-[#3a86ff]"/> PIT WALL & STRATEGY</h2>
+        <div className="flex-1 bg-[#0a0a0f] border border-gray-800 rounded-lg overflow-hidden flex flex-col">
+           <div className="flex justify-between items-center bg-[#121318] p-4 border-b border-gray-800/60">
+             <span className="font-bold text-white text-xs tracking-widest">LIVE LAPS</span>
+           </div>
+           <div className="flex-1 overflow-y-auto p-2 space-y-1 scrollbar-hide">
+             {laps.map((l: any, idx: number) => (
+               <div key={idx} className={`flex items-center px-4 py-2.5 rounded-md cursor-pointer transition-colors ${l.active ? 'bg-[#3a86ff]/20 border border-[#3a86ff]/50 text-white' : 'hover:bg-[#121318] text-[#a0a3b5]'}`}>
+                 <span className="w-12 text-[11px] font-bold">{l.lap}</span>
+                 <span className="flex-1 font-mono text-sm font-bold">{l.time}</span>
+                 <span className="text-xs font-bold">{l.diff}</span>
+               </div>
+             ))}
+           </div>
+        </div>
+      </div>
+      
+      <div className="w-[400px] flex flex-col gap-4 overflow-y-auto pr-2 scrollbar-hide">
+        <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-6 shadow-lg">
+          <h3 className="text-[#a0a3b5] text-[11px] font-black tracking-widest mb-4 uppercase">Energy Manager</h3>
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            <div className="bg-[#0a0a0f] border border-gray-800 rounded-lg p-4 flex flex-col items-center">
+              <span className="text-[#2a9d5c] font-mono text-2xl font-bold">{fuelLevel} L</span>
+              <span className="text-[#a0a3b5] text-[9px] font-bold mt-2 flex items-center gap-1"><Fuel size={10}/> FUEL</span>
+            </div>
+            <div className="bg-[#0a0a0f] border border-gray-800 rounded-lg p-4 flex flex-col items-center relative overflow-hidden">
+              <div className="absolute bottom-0 left-0 right-0 bg-[#3a86ff]/10" style={{ height: `${battery}%` }}></div>
+              <span className="text-[#3a86ff] font-mono text-2xl font-bold z-10">{battery} %</span>
+              <span className="text-[#a0a3b5] text-[9px] font-bold mt-2 flex items-center gap-1 z-10"><Activity size={10}/> V. ENERGY</span>
+            </div>
+          </div>
+        </div>
+        
+        {/* MATCH AVEC LE DESIGN DE TIRES DE DRIVING VIEW */}
+        <div className="bg-[#121318] border border-gray-800/50 rounded-xl p-6 shadow-lg">
+          <h3 className="text-[#a0a3b5] text-[11px] font-black tracking-widest mb-6 uppercase text-center">Tire Telemetry</h3>
+          <div className="grid grid-cols-2 gap-x-8 gap-y-8 relative z-0">
+            <div className="flex flex-col items-center">
+              <div className="relative w-28 h-28 rounded-full border-[10px] border-[#2e4b3c] flex items-center justify-center bg-[#0a0a0f] shadow-inner">
+                <svg className="absolute inset-0 w-full h-full transform -rotate-90">
+                  <circle cx="50%" cy="50%" r="44%" fill="none" stroke={liveData?.TireWearFL > 20 ? "#ef4444" : "#2a9d5c"} strokeWidth="10" strokeDasharray="0 1000" />
+                </svg>
+                <div className="flex flex-col items-center">
+                  <span className="text-white font-mono text-xl font-bold">{liveData?.TireTempFL ? liveData.TireTempFL.toFixed(0) : '--'}°C</span>
+                  <span className="text-[#a0a3b5] text-[9px] mt-1">Wear: {liveData?.TireWearFL ? liveData.TireWearFL.toFixed(1) : '--'}%</span>
+                </div>
+              </div>
+              <div className="flex justify-between w-full mt-3 text-[10px] font-bold">
+                <span className="text-gray-500 tracking-widest">FRONT L</span>
+                <span className="text-[#2a9d5c]">{liveData?.TirePressFL ? liveData.TirePressFL.toFixed(1) : '--'} kPa</span>
+              </div>
+            </div>
+
+            <div className="flex flex-col items-center">
+              <div className="relative w-28 h-28 rounded-full border-[10px] border-[#2e4b3c] flex items-center justify-center bg-[#0a0a0f] shadow-inner">
+                <svg className="absolute inset-0 w-full h-full transform -rotate-90">
+                  <circle cx="50%" cy="50%" r="44%" fill="none" stroke={liveData?.TireWearFR > 20 ? "#ef4444" : "#2a9d5c"} strokeWidth="10" strokeDasharray="0 1000" />
+                </svg>
+                <div className="flex flex-col items-center">
+                  <span className="text-white font-mono text-xl font-bold">{liveData?.TireTempFR ? liveData.TireTempFR.toFixed(0) : '--'}°C</span>
+                  <span className="text-[#a0a3b5] text-[9px] mt-1">Wear: {liveData?.TireWearFR ? liveData.TireWearFR.toFixed(1) : '--'}%</span>
+                </div>
+              </div>
+              <div className="flex justify-between w-full mt-3 text-[10px] font-bold">
+                <span className="text-[#2a9d5c]">{liveData?.TirePressFR ? liveData.TirePressFR.toFixed(1) : '--'} kPa</span>
+                <span className="text-gray-500 tracking-widest">FRONT R</span>
+              </div>
+            </div>
+
+            <div className="flex flex-col items-center">
+              <div className="relative w-28 h-28 rounded-full border-[10px] border-[#2e4b3c] flex items-center justify-center bg-[#0a0a0f] shadow-inner">
+                <svg className="absolute inset-0 w-full h-full transform -rotate-90">
+                  <circle cx="50%" cy="50%" r="44%" fill="none" stroke={liveData?.TireWearRL > 20 ? "#ef4444" : "#2a9d5c"} strokeWidth="10" strokeDasharray="0 1000" />
+                </svg>
+                <div className="flex flex-col items-center">
+                  <span className="text-white font-mono text-xl font-bold">{liveData?.TireTempRL ? liveData.TireTempRL.toFixed(0) : '--'}°C</span>
+                  <span className="text-[#a0a3b5] text-[9px] mt-1">Wear: {liveData?.TireWearRL ? liveData.TireWearRL.toFixed(1) : '--'}%</span>
+                </div>
+              </div>
+              <div className="flex justify-between w-full mt-3 text-[10px] font-bold">
+                <span className="text-gray-500 tracking-widest">REAR L</span>
+                <span className="text-[#2a9d5c]">{liveData?.TirePressRL ? liveData.TirePressRL.toFixed(1) : '--'} kPa</span>
+              </div>
+            </div>
+
+            <div className="flex flex-col items-center">
+              <div className="relative w-28 h-28 rounded-full border-[10px] border-[#2e4b3c] flex items-center justify-center bg-[#0a0a0f] shadow-inner">
+                <svg className="absolute inset-0 w-full h-full transform -rotate-90">
+                  <circle cx="50%" cy="50%" r="44%" fill="none" stroke={liveData?.TireWearRR > 20 ? "#ef4444" : "#2a9d5c"} strokeWidth="10" strokeDasharray="0 1000" />
+                </svg>
+                <div className="flex flex-col items-center">
+                  <span className="text-white font-mono text-xl font-bold">{liveData?.TireTempRR ? liveData.TireTempRR.toFixed(0) : '--'}°C</span>
+                  <span className="text-[#a0a3b5] text-[9px] mt-1">Wear: {liveData?.TireWearRR ? liveData.TireWearRR.toFixed(1) : '--'}%</span>
+                </div>
+              </div>
+              <div className="flex justify-between w-full mt-3 text-[10px] font-bold">
+                <span className="text-[#2a9d5c]">{liveData?.TirePressRR ? liveData.TirePressRR.toFixed(1) : '--'} kPa</span>
+                <span className="text-gray-500 tracking-widest">REAR R</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const TelemetryLiveSetup = ({ liveData }: any) => {
+  const renderBar = (value: number, max: number, color: string) => {
+    const pct = Math.max(0, Math.min(100, (value / max) * 100));
+    return (
+      <div className="flex-1 h-2 bg-[#0a0a0f] rounded-full overflow-hidden border border-gray-800">
+         <div className="h-full transition-all duration-75" style={{ width: `${pct}%`, backgroundColor: color }}></div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="flex-1 bg-[#121318] border border-gray-800/50 rounded-xl p-6 shadow-2xl flex flex-col overflow-hidden pb-6">
+      <h2 className="text-white font-black tracking-widest text-lg flex items-center gap-2 mb-6"><Wrench size={18} className="text-[#3a86ff]"/> LIVE SETUP SENSORS</h2>
+      
+      <div className="grid grid-cols-2 gap-8 h-full">
+        <div className="flex flex-col gap-6">
+          <div className="bg-[#0a0a0f] border border-gray-800/60 rounded-xl p-6 shadow-sm">
+            <span className="text-[#a0a3b5] text-[10px] font-bold tracking-widest mb-4 block">RIDE HEIGHT (m)</span>
+            <div className="grid grid-cols-2 gap-6 text-xs font-bold text-gray-300">
+              <div className="flex flex-col gap-1.5"><div className="flex justify-between"><span>FL</span><span className="text-white">{liveData?.RideHeightFL ? liveData.RideHeightFL.toFixed(4) : '--'}</span></div>{renderBar(liveData?.RideHeightFL || 0, 0.1, '#3a86ff')}</div>
+              <div className="flex flex-col gap-1.5"><div className="flex justify-between"><span>FR</span><span className="text-white">{liveData?.RideHeightFR ? liveData.RideHeightFR.toFixed(4) : '--'}</span></div>{renderBar(liveData?.RideHeightFR || 0, 0.1, '#3a86ff')}</div>
+              <div className="flex flex-col gap-1.5 mt-2"><div className="flex justify-between"><span>RL</span><span className="text-white">{liveData?.RideHeightRL ? liveData.RideHeightRL.toFixed(4) : '--'}</span></div>{renderBar(liveData?.RideHeightRL || 0, 0.1, '#8338ec')}</div>
+              <div className="flex flex-col gap-1.5 mt-2"><div className="flex justify-between"><span>RR</span><span className="text-white">{liveData?.RideHeightRR ? liveData.RideHeightRR.toFixed(4) : '--'}</span></div>{renderBar(liveData?.RideHeightRR || 0, 0.1, '#8338ec')}</div>
+            </div>
+          </div>
+
+          <div className="bg-[#0a0a0f] border border-gray-800/60 rounded-xl p-6 shadow-sm">
+            <span className="text-[#a0a3b5] text-[10px] font-bold tracking-widest mb-4 block">AERO & CHASSIS</span>
+            <div className="flex flex-col gap-5 text-xs font-bold text-gray-400">
+              <div className="flex justify-between items-center"><span>Brake Bias</span><span className="text-[#e9c46a] text-lg font-mono">{liveData?.BrakeBias ? liveData.BrakeBias.toFixed(1) : '--'}%</span></div>
+              <div className="flex justify-between items-center"><span>Aero Damage</span><span className={liveData?.AeroDamage > 0.05 ? "text-[#ef4444] text-lg font-mono" : "text-[#10b981] text-lg font-mono"}>{liveData?.AeroDamage ? (liveData.AeroDamage * 100).toFixed(1) : '0'}%</span></div>
+              <div className="flex justify-between items-center"><span>Steering Torque</span><span className="text-[#3a86ff] text-lg font-mono">{liveData?.SteeringTorque ? Math.abs(liveData.SteeringTorque).toFixed(1) : '--'} Nm</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-6">
+           <div className="bg-[#0a0a0f] border border-gray-800/60 rounded-xl p-6 shadow-sm">
+            <span className="text-[#a0a3b5] text-[10px] font-bold tracking-widest mb-4 block">BRAKE TEMPERATURES (°C)</span>
+            <div className="grid grid-cols-2 gap-6 text-xs font-bold text-gray-300">
+              <div className="flex flex-col gap-1.5"><div className="flex justify-between"><span>FL</span><span className="text-white">{liveData?.BrakeTempFL ? liveData.BrakeTempFL.toFixed(0) : '--'}</span></div>{renderBar(liveData?.BrakeTempFL || 0, 1000, '#ef4444')}</div>
+              <div className="flex flex-col gap-1.5"><div className="flex justify-between"><span>FR</span><span className="text-white">{liveData?.BrakeTempFR ? liveData.BrakeTempFR.toFixed(0) : '--'}</span></div>{renderBar(liveData?.BrakeTempFR || 0, 1000, '#ef4444')}</div>
+              <div className="flex flex-col gap-1.5 mt-2"><div className="flex justify-between"><span>RL</span><span className="text-white">{liveData?.BrakeTempRL ? liveData.BrakeTempRL.toFixed(0) : '--'}</span></div>{renderBar(liveData?.BrakeTempRL || 0, 1000, '#ef4444')}</div>
+              <div className="flex flex-col gap-1.5 mt-2"><div className="flex justify-between"><span>RR</span><span className="text-white">{liveData?.BrakeTempRR ? liveData.BrakeTempRR.toFixed(0) : '--'}</span></div>{renderBar(liveData?.BrakeTempRR || 0, 1000, '#ef4444')}</div>
+            </div>
+          </div>
+
+          <div className="bg-[#0a0a0f] border border-gray-800/60 rounded-xl p-6 shadow-sm">
+            <span className="text-[#a0a3b5] text-[10px] font-bold tracking-widest mb-4 block">ELECTRONICS & ENGINE</span>
+            <div className="flex flex-col gap-5 text-xs font-bold text-gray-400">
+              <div className="flex justify-between items-center"><span>ABS Intervention</span><span className={liveData?.ABS_Active ? "text-[#ef4444] animate-pulse text-sm font-black" : "text-gray-600 text-sm"}>{liveData?.ABS_Active ? 'ACTIVE' : 'IDLE'}</span></div>
+              <div className="flex justify-between items-center"><span>TC Intervention</span><span className={liveData?.TC_Active ? "text-[#ef4444] animate-pulse text-sm font-black" : "text-gray-600 text-sm"}>{liveData?.TC_Active ? 'ACTIVE' : 'IDLE'}</span></div>
+              <div className="flex justify-between items-center mt-2 border-t border-gray-800/60 pt-4"><span>Water Temp</span><span className={liveData?.EngineWaterTemp > 105 ? "text-[#ef4444] text-lg font-mono" : "text-white text-lg font-mono"}>{liveData?.EngineWaterTemp ? liveData.EngineWaterTemp.toFixed(1) : '--'}°C</span></div>
+              <div className="flex justify-between items-center"><span>Oil Temp</span><span className="text-white text-lg font-mono">{liveData?.EngineOilTemp ? liveData.EngineOilTemp.toFixed(1) : '--'}°C</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+// Le React.memo bloque les rafraîchissements inutiles de la carte GPS (Boost FPS)
+const MemoizedDrivingView = React.memo(DrivingView);
+
+export { 
+  DataView, 
+  MemoizedDrivingView as DrivingView, 
+  TimingView, 
+  TelemetryOverview, 
+  TelemetryPitWall, 
+  TelemetryLiveSetup 
+};
