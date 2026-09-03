@@ -23,7 +23,9 @@ class LiveSpotterEngine(threading.Thread):
         # --- CERVEAU STRATÉGIQUE ---
         self.strategy_announced = False
         self.comm_db = {}
-        comm_path = os.path.join(".", "community_reference.json")
+        # Ton coffre-fort de données
+        APP_DATA_DIR = r"C:\LMU_TrackEngineer_Data"
+        comm_path = os.path.join(APP_DATA_DIR, "community_reference.json")
         if os.path.exists(comm_path):
             try:
                 with open(comm_path, "r", encoding="utf-8") as f:
@@ -118,13 +120,37 @@ class LiveSpotterEngine(threading.Thread):
             if hazard_distance:
                 self.audio.say(f"Yellow flag. Incident ahead in {int(hazard_distance)} meters. Be ready to brake.", "yellow_flag_precise", cooldown=45)
             else:
-                self.audio.say("Yellow flag in sector. Keep your eyes open.", "yellow_flag_global", cooldown=45)
+                # Utilisation des drapeaux locaux par secteur
+                sector_flags = data.get('SectorFlag', [0, 0, 0])
+                if sector_flags[0] == 6: self.audio.say("Yellow flag in Sector 1.", "yellow_s1", cooldown=60)
+                elif sector_flags[1] == 6: self.audio.say("Yellow flag in Sector 2.", "yellow_s2", cooldown=60)
+                elif sector_flags[2] == 6: self.audio.say("Yellow flag in Sector 3.", "yellow_s3", cooldown=60)
+                else: self.audio.say("Yellow flag on track. Keep your eyes open.", "yellow_flag_global", cooldown=45)
 
         self.last_yellow_flag = yellow
 
         if penalties > self.last_penalties:
             self.audio.say("Race control gave us a penalty. We need to serve it within 3 laps.", "penalty", cooldown=300)
         self.last_penalties = penalties
+
+        # Alerte Track Limits instantanée si le tour est annulé
+        if data.get('LapInvalidated', False):
+            self.audio.say("Lap time deleted. Watch track limits.", "track_limits", cooldown=30)
+            
+        # Compteur d'avertissements stricts
+        warnings = data.get('TrackLimitsWarnings', 0)
+        if warnings > getattr(self, 'last_track_warnings', 0):
+            if warnings == 2:
+                self.audio.say("Track limits warning. One more and it's a drive-through penalty. Keep it clean.", "track_limits_critical", cooldown=60)
+            elif warnings == 1:
+                self.audio.say("First track limit warning.", "track_limits_first", cooldown=60)
+        self.last_track_warnings = warnings
+
+        # Confirmation de la demande d'arrêt aux stands du joueur
+        scheduled_stops = data.get('ScheduledStops', 0)
+        if scheduled_stops > getattr(self, 'last_scheduled_stops', 0):
+            self.audio.say("Pit crew is ready. We are expecting you at the end of this lap.", "pit_crew_ready", cooldown=300)
+        self.last_scheduled_stops = scheduled_stops
 
     def _analyze_pit_entry(self, data):
         my_dist = data.get('MyLapDist', 0)
@@ -181,8 +207,13 @@ class LiveSpotterEngine(threading.Thread):
                         if any(p in comp_class for p in ["Hyper", "LMP"]):
                             self.audio.say("Faster class prototype approaching behind. Hold your line.", "prototype_behind", cooldown=45)
                 else:
-                    if -60 < gap_dist < -15: 
-                        self.audio.say("Traffic close behind, hold your line.", "traffic_behind", cooldown=45)
+                    gap_behind = data.get('TimeGapBehind', 99.0)
+                    gap_place_ahead = data.get('TimeGapPlaceAhead', 99.0)
+                    
+                    if 0.0 < gap_behind < 1.0:
+                        self.audio.say(f"Car behind is at {gap_behind:.1f} seconds. Defend your line.", "traffic_behind_precise", cooldown=45)
+                    elif 0.0 < gap_place_ahead < 2.0:
+                        self.audio.say(f"Class rival ahead is at {gap_place_ahead:.1f} seconds. You are catching them, keep pushing.", "rival_ahead", cooldown=180)
                     elif 10 < gap_dist < 300 and comp.get('in_pits', 0) == 1:
                         self.audio.say("Car ahead is pitting. Push now for the undercut.", "undercut", cooldown=600)
                     
@@ -302,6 +333,16 @@ class LiveSpotterEngine(threading.Thread):
         if track_temp < 15.0:
             self.audio.say("Track temperature is dropping fast. Mechanical grip will be lower.", "track_cold", cooldown=1800)
 
+        grip_level = data.get('TrackGripLevel', 0)
+        if grip_level > 80: # Piste très gommée
+            self.audio.say("Track is rubbering in nicely. Grip levels are optimal.", "track_rubber", cooldown=3600)
+
+        clouds = data.get('DarkCloud', 0.0)
+        headlights = data.get('Headlights', False)
+        # Si de gros nuages arrivent (ou la nuit) et que les phares sont éteints
+        if clouds > 0.6 and not headlights:
+            self.audio.say("Visibility is dropping. Turn your headlights on.", "headlights_on", cooldown=300)
+
         if rain > 0.2 and gear > 4 and raw_throttle > 80 and (raw_throttle - filtered_throttle) > 40:
             self.aqua_planing_counter += 1
             if self.aqua_planing_counter > 10: 
@@ -353,8 +394,12 @@ class LiveSpotterEngine(threading.Thread):
         t_fl = data.get('TireTempFL', 80) 
         w_fl = data.get('TireWearFL', 0)
 
-        if self.laps_completed <= 1 and t_fl < 65:
-            self.audio.say("Tires are cold. Brake early and avoid kerbs.", "tires_cold", cooldown=180)
+        compound = str(data.get('FrontTireCompound', 'Unknown')).lower()
+        is_wet_tire = 'wet' in compound or 'rain' in compound
+        optimal_temp = 40 if is_wet_tire else 70
+        
+        if self.laps_completed <= 1 and t_fl < (optimal_temp - 10):
+            self.audio.say(f"Your {compound} tires are cold. Brake early and avoid kerbs.", "tires_cold", cooldown=180)
 
         if p_fl < 80 or p_fr < 80 or p_rl < 80 or p_rr < 80:
             self.audio.say("Puncture detected! Puncture! Slow down and box immediately.", "puncture", cooldown=60)
@@ -378,6 +423,9 @@ class LiveSpotterEngine(threading.Thread):
             self.audio.say("Front left tire wear is critical. You are losing rubber fast.", "tire_wear_critical", cooldown=600)
         elif w_fl > 15.0:
             self.audio.say("Tire degradation is increasing. Move brake bias rearwards to protect the front.", "tire_wear_warn", cooldown=1800)
+
+        if data.get('TireFlatFL', False) or data.get('TireFlatFR', False) or data.get('TireFlatRL', False) or data.get('TireFlatRR', False):
+            self.audio.say("Flat spot detected! You locked up hard. Expect heavy vibrations on the straights.", "flat_spot", cooldown=600)
 
     def _analyze_chassis(self, data):
         rh_fl = data.get('RideHeightFL', 0.050)

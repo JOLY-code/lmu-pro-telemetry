@@ -357,22 +357,24 @@ class RaceEngineerLogic:
                 self.log("Conseil Pilotage : Phases de 'coasting' (roue libre) prolongées détectées en courbe.")
                 self.log("Explication (Audit) : Transition trop lente entre freinage et accélération. Déficit cinétique à l'apex.")
 
-        # 2. Analyse du Slip Ratio (Taux de Glissement au freinage)
-        if 'WheelSpeedFL' in df.columns and 'TopSpeed' in df.columns and 'Brake' in df.columns:
+        # 2. Analyse du Slip Ratio (Taux de Glissement au freinage sur les 2 roues avant)
+        if 'WheelSlipFL' in df.columns and 'WheelSlipFR' in df.columns and 'Brake' in df.columns:
             heavy_braking = df[(df['Brake'] > 80) & (df['TopSpeed'] > 100)].copy()
             
             if not heavy_braking.empty:
-                heavy_braking['SlipRatioFL'] = (heavy_braking['WheelSpeedFL'] - heavy_braking['TopSpeed']) / heavy_braking['TopSpeed'].clip(lower=1.0)
-                min_slip_fl = heavy_braking['SlipRatioFL'].min() 
-                avg_slip_fl = heavy_braking['SlipRatioFL'].mean()
+                # On prend le pire glissement entre la roue gauche et droite
+                min_slip_fl = heavy_braking['WheelSlipFL'].min() 
+                min_slip_fr = heavy_braking['WheelSlipFR'].min()
+                worst_slip = min(min_slip_fl, min_slip_fr)
+                avg_slip = (heavy_braking['WheelSlipFL'].mean() + heavy_braking['WheelSlipFR'].mean()) / 2.0
                 
-                self.log(f"📊 Pilotage : Glissement max au freinage (Roue AVG) = {min_slip_fl*100:.1f}%")
+                self.log(f"📊 Pilotage : Glissement max au freinage = {worst_slip*100:.1f}%")
 
-                if min_slip_fl < -0.25:
+                if worst_slip < -0.25:
                     self.log("Diagnostic : Micro-blocages destructeurs (Lock-ups) détectés à l'avant.")
                     self.log("Action : Recul de la répartition de freinage vers l'arrière (+1 Index Rear Brake).")
                     self._tweak('CONTROLS', 'RearBrakeSetting', delta=+1)
-                elif avg_slip_fl > -0.05:
+                elif avg_slip > -0.05:
                     self.log("Diagnostic Pilotage : Sous-exploitation du grip au freinage (Roues synchronisées avec la piste).")
                     if heavy_braking['Brake'].max() > 95:
                         self.log("Action : Tu écrases la pédale à 100% sans bloquer. Augmentation de la force max (Max Pedal Force).")
@@ -816,6 +818,18 @@ class RaceEngineerLogic:
                 self._tweak('REARLEFT', 'RideHeightSetting', +1, "Le nez de la voiture ne plonge pas assez au freinage. Déplace le Brake Bias vers l'avant.", is_incar_setting=True)
                 self._tweak('REARRIGHT', 'RideHeightSetting', +1, "", is_incar_setting=False)
 
+        # 3. Analyse de la Balance Aérodynamique (L/D Ratio)
+        if 'FrontDownForce' in df.columns and 'RearDownForce' in df.columns and 'Drag' in df.columns:
+            total_df = avg_data['FrontDownForce'] + avg_data['RearDownForce']
+            if total_df > 0 and avg_data['Drag'] > 0:
+                aero_balance = (avg_data['FrontDownForce'] / total_df) * 100
+                efficiency = total_df / avg_data['Drag']
+                self.log(f"📊 Aéro : Efficacité (L/D) = {efficiency:.2f} | Balance Avant = {aero_balance:.1f}%")
+                
+                if aero_balance < 35.0:
+                    self.log("Diagnostic Aéro : La voiture est trop assise sur l'arrière. Risque de fort sous-virage à haute vitesse.")
+                    self._tweak('FRONTWING', 'FWSetting', delta=+1, advice_fixed="Rajoute de l'aileron avant si possible.", limit_max=5)
+
     def _analyze_tire_temperatures(self, avg_data):
         """
         Analyse de la GÉOMÉTRIE. 
@@ -1172,6 +1186,13 @@ class RaceEngineerLogic:
                 self.log(f"Diagnostic : Refroidissement moteur excessif ({max_water:.1f}°C max).")
                 self.log("Action : Fermeture du radiateur d'eau pour réduire la traînée aéro (Drag) et gagner en VMax.")
                 self._tweak('BODYAERO', 'WaterRadiatorSetting', delta=-1, limit_min=1)
+
+        # 1.5 Analyse de l'Huile Moteur
+        if 'EngineOilTemp' in df.columns:
+            max_oil = df['EngineOilTemp'].max()
+            if max_oil > 115.0:
+                self.log(f"🚨 DANGER MOTEUR : Surchauffe de l'huile ({max_oil:.1f}°C). Usure interne accélérée.")
+                self._tweak('BODYAERO', 'OilRadiatorSetting', delta=+1, limit_max=5)
 
         # 2. Analyse du Refroidissement des Freins (Brake Ducts)
         if 'BrakeTempFL' in df.columns and 'BrakeTempFR' in df.columns:

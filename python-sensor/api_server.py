@@ -29,6 +29,19 @@ from bop_manager import BoPManager
 from community_reference_manager import CommunityReferenceManager
 
 # ==========================================================
+# ARCHITECTURE DES FICHIERS (À ADAPTER SELON TON PC)
+# ==========================================================
+# 1. Dossier où LMU écrit sa télémétrie en direct et ses XML
+LMU_LOG_DIR = r"C:\Program Files (x86)\Steam\steamapps\common\Le Mans Ultimate\UserData\Log"
+
+# 2. Dossier où LMU lit les setups dans le garage
+LMU_SETUP_DIR = r"C:\Program Files (x86)\Steam\steamapps\common\Le Mans Ultimate\UserData\player\Settings"
+
+# 3. Ton coffre-fort personnel (Base de données, BoP, JSONs de la communauté)
+APP_DATA_DIR = r"C:\LMU_TrackEngineer_Data"
+os.makedirs(APP_DATA_DIR, exist_ok=True) # Crée le dossier s'il n'existe pas
+
+# ==========================================================
 # ISOLATION MATÉRIELLE
 # ==========================================================
 def isolate_process():
@@ -62,15 +75,31 @@ def startup_event():
     spotter_engine.start()
 
     def update_external_data():
-        # Mise à jour BoP (Le manager lit le titre de l'article en ligne avant de télécharger)
-        bop = BoPManager()
+        # Mise à jour BoP
+        bop = BoPManager(data_dir=APP_DATA_DIR)
         if bop.fetch_latest_bop_pdf():
             bop.parse_bop_pdf()
         
-        # Mise à jour Laptimes (Le manager lit le "Last updated: [...] CEST" avant de télécharger)
+        # Mise à jour Laptimes
         from community_reference_manager import CommunityReferenceManager
-        comm = CommunityReferenceManager()
+        comm = CommunityReferenceManager(data_dir=APP_DATA_DIR)
         comm.fetch_and_parse()
+        
+        # --- NOUVEAU : AUTO-SCAN DES XML DE FIN DE COURSE ---
+        print("[AUTO-SYNC] Vérification des nouvelles courses terminées...")
+        parser = XMLHistoryParser(db_directory=APP_DATA_DIR)
+        xml_results_dir = os.path.join(LMU_LOG_DIR, "Results")
+        if os.path.exists(xml_results_dir):
+            import hashlib
+            for file in os.listdir(xml_results_dir):
+                if file.endswith(".xml"):
+                    xml_path = os.path.join(xml_results_dir, file)
+                    file_id = hashlib.md5(xml_path.encode('utf-8')).hexdigest()[:10]
+                    db_path = os.path.join(APP_DATA_DIR, f"imported_session_{file_id}.duckdb")
+                    # Si la base de données n'existe pas, c'est une nouvelle course !
+                    if not os.path.exists(db_path):
+                        print(f"[AUTO-SYNC] Nouvelle course détectée ({file}). Analyse en cours...")
+                        parser.import_xml_results(xml_path)
 
     threading.Thread(target=update_external_data, daemon=True).start()
 
@@ -99,7 +128,7 @@ async def websocket_telemetry(websocket: WebSocket):
 @app.get("/api/community-reference")
 def get_community_reference():
     """Renvoie les données d'Ohne Speed (Temps Alien, Barèmes de Pace, Fuel)."""
-    comm_path = os.path.join(".", "community_reference.json")
+    comm_path = os.path.join(APP_DATA_DIR, "community_reference.json")
     if os.path.exists(comm_path):
         with open(comm_path, "r", encoding="utf-8") as f:
             return {"status": "success", "data": json.load(f)}
@@ -113,7 +142,7 @@ def test_audio():
 @app.get("/api/bop")
 def get_bop_data():
     """Renvoie la base de données BoP complète."""
-    bop_path = os.path.join(".", "bop_database.json")
+    bop_path = os.path.join(APP_DATA_DIR, "bop_database.json")
     if os.path.exists(bop_path):
         with open(bop_path, "r", encoding="utf-8") as f:
             return {"status": "success", "data": json.load(f)}
@@ -121,7 +150,7 @@ def get_bop_data():
 
 @app.get("/api/sessions/latest")
 def get_latest_session_info():
-    pipeline = LMUTelemetryPipeline(log_directory=".")
+    pipeline = LMUTelemetryPipeline(log_directory=LMU_LOG_DIR)
     context = pipeline.extract_session_context()
     if not context: return {"status": "empty", "message": "Aucune session trouvée dans DuckDB."}
     return {"status": "success", "session": context}
@@ -129,7 +158,7 @@ def get_latest_session_info():
 @app.get("/api/diagnostic")
 def run_ai_diagnostic():
     print("[API] Lancement du diagnostic par l'IA...")
-    pipeline = LMUTelemetryPipeline(log_directory=".")
+    pipeline = LMUTelemetryPipeline(log_directory=LMU_LOG_DIR) # Modifié
     df_telemetry = pipeline.extract_stint_data()
     session_context = pipeline.extract_session_context()
     df_competitors = pipeline.extract_competitors_data()
@@ -137,7 +166,7 @@ def run_ai_diagnostic():
     if df_telemetry is None: return {"status": "error", "message": "Aucune donnée"}
 
     df_spatial = pipeline.build_spatial_telemetry(df_telemetry)
-    sm = LMU_SetupManager(setups_directory=".")
+    sm = LMU_SetupManager(setups_directory=LMU_SETUP_DIR) # Modifié
     engineer = RaceEngineerLogic(sm)
     success = engineer.analyze_and_optimize(df_telemetry, session_context, df_competitors)
     
@@ -155,7 +184,7 @@ def run_ai_diagnostic():
 
 @app.get("/api/analytics/overall")
 def get_overall_analytics():
-    parser = XMLHistoryParser(log_directory=".")
+    parser = XMLHistoryParser(db_directory=APP_DATA_DIR)
     try:
         kpis = parser.extract_lifetime_kpis()
         return {"status": "success", "data": kpis}
@@ -164,7 +193,7 @@ def get_overall_analytics():
 
 @app.get("/api/sessions/history")
 def get_sessions_history():
-    parser = XMLHistoryParser(log_directory=".")
+    parser = XMLHistoryParser(db_directory=APP_DATA_DIR)
     try:
         history = parser.get_all_sessions_history()
         return {"status": "success", "data": history}
@@ -175,7 +204,7 @@ def get_sessions_history():
 def get_session_details(file: str = Query(...), type: str = Query(...)):
     try:
         # CORRECTION ICI : On remet le "." classique au lieu du LMU_LOG_DIR qui faisait crasher
-        parser = XMLHistoryParser(log_directory=".") 
+        parser = XMLHistoryParser(db_directory=APP_DATA_DIR)
         details = parser.get_session_details(file, type)
         if details:
             return {"status": "success", "data": details}
@@ -188,7 +217,7 @@ def get_session_details(file: str = Query(...), type: str = Query(...)):
 @app.get("/api/sessions/standings")
 def get_session_standings(file: str, type: str):
     """Renvoie le classement complet de la course trié par classe."""
-    parser = XMLHistoryParser(log_directory=".")
+    parser = XMLHistoryParser(db_directory=APP_DATA_DIR)
     try:
         standings = parser.get_session_standings(file, type)
         if standings: return {"status": "success", "data": standings}
@@ -199,7 +228,7 @@ def get_session_standings(file: str, type: str):
 @app.get("/api/sessions/charts")
 def get_session_charts(file: str, type: str):
     """Renvoie les données formatées pour les graphiques de course (Position, Gaps, LapTimes)."""
-    parser = XMLHistoryParser(log_directory=".")
+    parser = XMLHistoryParser(db_directory=APP_DATA_DIR)
     try:
         charts_data = parser.get_race_charts_data(file, type)
         if charts_data: return {"status": "success", "data": charts_data}
@@ -210,7 +239,7 @@ def get_session_charts(file: str, type: str):
 @app.get("/api/sessions/stats")
 def get_session_stats(file: str, type: str):
     """Renvoie les Race Stats détaillées (Pace, Strategy, Incidents) par catégorie."""
-    parser = XMLHistoryParser(log_directory=".")
+    parser = XMLHistoryParser(db_directory=APP_DATA_DIR)
     try:
         stats = parser.get_race_stats_data(file, type)
         if stats: return {"status": "success", "data": stats}
@@ -221,7 +250,7 @@ def get_session_stats(file: str, type: str):
 @app.get("/api/sessions/director")
 def get_session_director(file: str, type: str):
     """Renvoie l'intégralité du log de course (Incidents, TrackLimits, Damage)."""
-    parser = XMLHistoryParser(log_directory=".")
+    parser = XMLHistoryParser(db_directory=APP_DATA_DIR)
     try:
         data = parser.get_race_director_data(file, type)
         if data: return {"status": "success", "data": data}
@@ -232,7 +261,7 @@ def get_session_director(file: str, type: str):
 @app.get("/api/sessions/yourcharts")
 def get_session_yourcharts(file: str, type: str):
     """Renvoie les données graphiques personnelles du joueur courant (Matheo JOLY)."""
-    parser = XMLHistoryParser(log_directory=".")
+    parser = XMLHistoryParser(db_directory=APP_DATA_DIR)
     try:
         data = parser.get_your_charts_data(file, type)
         if data: return {"status": "success", "data": data}
@@ -246,7 +275,7 @@ class NoteSaveRequest(BaseModel):
 
 @app.get("/api/sessions/chat")
 def get_session_chat(file: str, type: str):
-    parser = XMLHistoryParser(log_directory=".")
+    parser = XMLHistoryParser(db_directory=APP_DATA_DIR)
     try:
         data = parser.get_session_chat(file, type)
         return {"status": "success", "data": data}
@@ -255,7 +284,7 @@ def get_session_chat(file: str, type: str):
 
 @app.get("/api/sessions/notes")
 def get_session_notes(file: str):
-    parser = XMLHistoryParser(log_directory=".")
+    parser = XMLHistoryParser(db_directory=APP_DATA_DIR)
     try:
         data = parser.get_personal_notes(file)
         return {"status": "success", "data": data}
@@ -264,7 +293,7 @@ def get_session_notes(file: str):
 
 @app.post("/api/sessions/notes/save")
 def save_session_notes(req: NoteSaveRequest):
-    parser = XMLHistoryParser(log_directory=".")
+    parser = XMLHistoryParser(db_directory=APP_DATA_DIR)
     try:
         success = parser.save_personal_notes(req.file, req.notes)
         if success: return {"status": "success", "message": "Notes saved."}
@@ -282,7 +311,7 @@ async def upload_xml_results(file: UploadFile = File(...)):
     with open(temp_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
         
-    parser = XMLHistoryParser(log_directory=".")
+    parser = XMLHistoryParser(db_directory=APP_DATA_DIR)
     success = parser.import_xml_results(temp_path)
     if os.path.exists(temp_path): os.remove(temp_path)
         
@@ -483,7 +512,7 @@ def get_online_schedule():
 
 @app.get("/api/setups/apply")
 def apply_setup(track: str):
-    sm = LMU_SetupManager(setups_directory=".")
+    sm = LMU_SetupManager(setups_directory=LMU_SETUP_DIR) # Modifié
     sm.export_optimized_setup(track_name=track)
     return {"status": "success"}
 

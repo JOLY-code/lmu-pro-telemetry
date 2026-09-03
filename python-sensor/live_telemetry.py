@@ -362,6 +362,7 @@ class LiveTelemetryThread(threading.Thread):
                         'SessionPhase': scoring_data.mGamePhase,
                         'TrackName': scoring_data.mTrackName.decode('utf-8', errors='ignore').split('-')[0].strip(),
                         'FuelCapacity': my_phys.mFuelCapacity,
+                        'ScheduledStops': my_phys.mScheduledStops,
 
                         # --- ENVIRONNEMENT ---
                         'Time': scoring_data.mCurrentET, 
@@ -371,9 +372,13 @@ class LiveTelemetryThread(threading.Thread):
                         'Minimum Path Wetness': scoring_data.mMinPathWetness, 
                         'OffpathWetness': scoring_data.mMaxPathWetness, 
                         'WindSpeed': wind_speed,
+                        'TrackGripLevel': scoring_data.mTrackGripLevel, # Dépôt de gomme en direct
+                        'DarkCloud': scoring_data.mDarkCloud,
+                        'Headlights': my_phys.mHeadlights,
                         
                         # --- GESTION COURSE ---
                         'YellowFlag': scoring_data.mYellowFlagState,
+                        'SectorFlag': list(scoring_data.mSectorFlag), # Tableau de 3 secteurs
                         'Penalties': my_score.mNumPenalties, 
                         'In Pits': my_score.mInPits,
                         
@@ -384,6 +389,11 @@ class LiveTelemetryThread(threading.Thread):
                         'MyClass': my_score.mVehicleClass.decode('utf-8', errors='ignore'), 
                         'MyPosX': my_score.mPos.x,
                         'MyPosZ': my_score.mPos.z,
+                        'TimeGapAhead': my_phys.mTimeGapCarAhead,   # Écart avec voiture devant
+                        'TimeGapBehind': my_phys.mTimeGapCarBehind, # Écart avec voiture derrière
+                        'TimeGapPlaceAhead': my_phys.mTimeGapPlaceAhead, # Écart avec adversaire direct de MA catégorie
+                        'LapInvalidated': my_phys.mLapInvalidated,  # Flag de tour annulé
+                        'TrackLimitsWarnings': my_phys.mTrackLimitsSteps, # Compteur d'avertissements FIA
                         
                         # --- INPUTS PILOTE ---
                         'Speed': math.sqrt(my_phys.mLocalVel.x**2 + my_phys.mLocalVel.y**2 + my_phys.mLocalVel.z**2) * 3.6,
@@ -409,7 +419,7 @@ class LiveTelemetryThread(threading.Thread):
                         'SteeringTorque': my_phys.mSteeringShaftTorque,
                         
                         'GForceLat': my_phys.mGForce[0],
-                        'GForceVert': my_phys.mGForce[1], # L'accélération verticale pour les sauts !
+                        'GForceVert': my_phys.mGForce[1],
                         'GForceLon': my_phys.mGForce[2],
                         
                         # --- MOTEUR ET ÉNERGIE ---
@@ -425,11 +435,19 @@ class LiveTelemetryThread(threading.Thread):
                         'AeroDamage': aero_damage,
                         'WheelsDetached': wheels_detached,
 
-                        # --- ROUES ET FREINS (Les 4 coins extraits) ---
+                        # --- ROUES, FREINS & SUSPENSIONS (Les 4 coins extraits) ---
+                        'FrontTireCompound': my_phys.mFrontTireCompoundName.decode('utf-8', errors='ignore'),
+                        'RearTireCompound': my_phys.mRearTireCompoundName.decode('utf-8', errors='ignore'),
+
                         'RideHeightFL': my_phys.mWheel[0].mRideHeight,
                         'RideHeightFR': my_phys.mWheel[1].mRideHeight,
                         'RideHeightRL': my_phys.mWheel[2].mRideHeight,
                         'RideHeightRR': my_phys.mWheel[3].mRideHeight,
+
+                        'SuspDeflectFL': my_phys.mWheel[0].mSuspensionDeflection,
+                        'SuspDeflectFR': my_phys.mWheel[1].mSuspensionDeflection,
+                        'SuspDeflectRL': my_phys.mWheel[2].mSuspensionDeflection,
+                        'SuspDeflectRR': my_phys.mWheel[3].mSuspensionDeflection,
                         
                         'TirePressFL': my_phys.mWheel[0].mPressure,
                         'TirePressFR': my_phys.mWheel[1].mPressure,
@@ -441,7 +459,35 @@ class LiveTelemetryThread(threading.Thread):
                         'BrakeTempRL': my_phys.mWheel[2].mBrakeTemp,
                         'BrakeTempRR': my_phys.mWheel[3].mBrakeTemp,
                         
+                        'TireTempFL': my_phys.mWheel[0].mTemperature[1],
+                        'TireTempFR': my_phys.mWheel[1].mTemperature[1],
+                        'TireTempRL': my_phys.mWheel[2].mTemperature[1],
+                        'TireTempRR': my_phys.mWheel[3].mTemperature[1],
+                        
+                        'TireCarcassFL': my_phys.mWheel[0].mTireCarcassTemperature,
+                        'TireCarcassFR': my_phys.mWheel[1].mTireCarcassTemperature,
+                        'TireCarcassRL': my_phys.mWheel[2].mTireCarcassTemperature,
+                        'TireCarcassRR': my_phys.mWheel[3].mTireCarcassTemperature,
+                        
                         'TireWearFL': my_phys.mWheel[0].mWear * 100.0,
+                        'TireWearFR': my_phys.mWheel[1].mWear * 100.0,
+                        'TireWearRL': my_phys.mWheel[2].mWear * 100.0,
+                        'TireWearRR': my_phys.mWheel[3].mWear * 100.0,
+                        
+                        'TireFlatFL': my_phys.mWheel[0].mFlat,
+                        'TireFlatFR': my_phys.mWheel[1].mFlat,
+                        'TireFlatRL': my_phys.mWheel[2].mFlat,
+                        'TireFlatRR': my_phys.mWheel[3].mFlat,
+                        
+                        'GripFractFL': my_phys.mWheel[0].mGripFract,
+                        'GripFractFR': my_phys.mWheel[1].mGripFract,
+                        'GripFractRL': my_phys.mWheel[2].mGripFract,
+                        'GripFractRR': my_phys.mWheel[3].mGripFract,
+                        
+                        'TireLoadFL': my_phys.mWheel[0].mTireLoad,
+                        'TireLoadFR': my_phys.mWheel[1].mTireLoad,
+                        'TireLoadRL': my_phys.mWheel[2].mTireLoad,
+                        'TireLoadRR': my_phys.mWheel[3].mTireLoad,
                         
                         'CompetitorsCount': len(competitors),
                         'CompetitorsLive': competitors

@@ -72,8 +72,8 @@ class LMUTelemetryPipeline:
                 "Brakes Force"[1] AS BrakeForceFL, "Brakes Force"[2] AS BrakeForceFR,
                 "Brakes Force"[3] AS BrakeForceRL, "Brakes Force"[4] AS BrakeForceRR,
                 
-                "Brake Thickness"[1] AS BrakeThickFL, "Brake Thickness"[2] AS BrakeThickFR,
-                "Brake Thickness"[3] AS BrakeThickRL, "Brake Thickness"[4] AS BrakeThickRR,
+                "Brake Tickness"[1] AS BrakeThickFL, "Brake Tickness"[2] AS BrakeThickFR,
+                "Brake Tickness"[3] AS BrakeThickRL, "Brake Tickness"[4] AS BrakeThickRR,
                 
                 "FrontRideHeight", "RearRideHeight", "FrontWingHeight", 
                 "G Force Lat" as LatAccel, "G Force Long" as LongAccel, "G Force Vert" as VertAccel,
@@ -87,7 +87,7 @@ class LMUTelemetryPipeline:
                 "Brake Pos" as Brake, "Brake Pos Unfiltered" as UnfilteredBrake, "FilteredBrake",
                 "Clutch Pos" as Clutch, "Clutch Pos Unfiltered", "Clutch RPM",
                 
-                "Gear", "Fuel Level" as FuelConsumed, "Virtual Energy", "SoC", "Regen Rate" as RegenRate,
+                "Gear", "Fuel Level" as FuelLevel, "Virtual Energy", "SoC", "Regen Rate" as RegenRate,
                 
                 "Engine RPM" as EngineRPM, "Engine Max RPM" as EngineMaxRPM,
                 "Engine Water Temp" AS EngineWaterTemp, "Engine Oil Temp" AS EngineOilTemp,
@@ -102,7 +102,7 @@ class LMUTelemetryPipeline:
 
                 "ABS", "ABSLevel", "AntiStall Activated", "Best LapTime", "Best Sector1", "Best Sector2",
                 "Brake Migration", "CloudDarkness", "Current LapTime", "Current Sector", "Current Sector1", "Current Sector2",
-                "Finish Status", "FrontFlapActivated", "FuelMixtureMap", "Headlights State", "In Pits",
+                "Finish Status", "FrontFlapActivated", "FuelMixtureMap", "LaunchControlActive", "Headlights State", "In Pits",
                 "Last Sector1", "Last Sector2", "LastImpactMagnitude", "Minimum Path Wetness", "OffpathWetness",
                 "RearFlapActivated", "RearFlapLegalStatus", "Sector1 Flag", "Sector2 Flag", "Sector3 Flag",
                 "Speed Limiter", "SurfaceTypes", "TC", "TCCut", "TCLevel", "TCSlipAngle", "TyresCompound",
@@ -115,6 +115,18 @@ class LMUTelemetryPipeline:
             df = con.execute(query).df()
             con.close()
             if df.empty: return None
+            
+            # --- CALCULS MATHÉMATIQUES MANQUANTS DANS LMU ---
+            # 1. Glissement Pneu (Slip Ratio) : (WheelSpeed / GroundSpeed) - 1
+            df['WheelSlipFL'] = (df['WheelSpeedFL'] / df['TopSpeed'].clip(lower=1.0)) - 1
+            df['WheelSlipFR'] = (df['WheelSpeedFR'] / df['TopSpeed'].clip(lower=1.0)) - 1
+            df['WheelSlipRL'] = (df['WheelSpeedRL'] / df['TopSpeed'].clip(lower=1.0)) - 1
+            df['WheelSlipRR'] = (df['WheelSpeedRR'] / df['TopSpeed'].clip(lower=1.0)) - 1
+            
+            # 2. Vraie consommation de carburant (FuelLevel précédent - FuelLevel actuel)
+            df['FuelConsumed'] = -df['FuelLevel'].diff().fillna(0)
+            df.loc[df['FuelConsumed'] < 0, 'FuelConsumed'] = 0 # Ignore les ravitaillements
+            
             max_acceptable_time = df['LapTime'].min() * 1.05
             return df[df['LapTime'] <= max_acceptable_time]
         except duckdb.Error as e:

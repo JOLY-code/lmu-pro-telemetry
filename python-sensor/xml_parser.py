@@ -9,8 +9,8 @@ import json
 
 class XMLHistoryParser:
     """Module Data Engineer dédié EXCLUSIVEMENT à l'historique XML."""
-    def __init__(self, log_directory="."):
-        self.log_directory = log_directory
+    def __init__(self, db_directory=r"C:\LMU_TrackEngineer_Data"):
+        self.db_directory = db_directory
 
     # ==========================================
     # FONCTIONS BOUCLIERS (Anti-Crash)
@@ -48,7 +48,7 @@ class XMLHistoryParser:
             root = tree.getroot()
             
             file_id = hashlib.md5(xml_filepath.encode('utf-8')).hexdigest()[:10]
-            db_file = os.path.join(self.log_directory, f"imported_session_{file_id}.duckdb")
+            db_file = os.path.join(self.db_directory, f"imported_session_{file_id}.duckdb")
             
             con = duckdb.connect(database=db_file)
             con.execute("DROP TABLE IF EXISTS sessions")
@@ -270,7 +270,7 @@ class XMLHistoryParser:
         import duckdb
         import pandas as pd
         
-        search_pattern = os.path.join(self.log_directory, "imported_session_*.duckdb")
+        search_pattern = os.path.join(self.db_directory, "imported_session_*.duckdb")
         files = glob.glob(search_pattern)
         history = []
         
@@ -436,7 +436,7 @@ class XMLHistoryParser:
             finally:
                 if con is not None: con.close()
                     
-        history.sort(key=lambda x: os.path.getmtime(os.path.join(self.log_directory, x['file'])), reverse=True)
+        history.sort(key=lambda x: os.path.getmtime(os.path.join(self.db_directory, x['file'])), reverse=True)
         return history
 
     # ==========================================
@@ -444,7 +444,7 @@ class XMLHistoryParser:
     # ==========================================
     def get_session_details(self, filename, session_type):
         """Récupère et calcule toutes les données pour la vue Overview de React."""
-        db_file = os.path.join(self.log_directory, filename)
+        db_file = os.path.join(self.db_directory, filename)
         if not os.path.exists(db_file): return None
         
         con = duckdb.connect(database=db_file, read_only=True)
@@ -494,7 +494,7 @@ class XMLHistoryParser:
             elif "GTE" in raw_class: clean_class = "LMGTE"
             else: clean_class = raw_class
             
-            comm_path = os.path.join(".", "community_reference.json")
+            comm_path = os.path.join(self.db_directory, "community_reference.json")
             if os.path.exists(comm_path):
                 try:
                     with open(comm_path, "r", encoding="utf-8") as f:
@@ -582,9 +582,14 @@ class XMLHistoryParser:
             player_best = float(info['BestLapTime']) if pd.notna(info['BestLapTime']) else 0.0
 
             # 3. CRÉATION DES 4 CATÉGORIES DE TOURS
-            all_laps = laps_df[laps_df['LapTime'] > 0]
-            valid_laps = all_laps[all_laps['Pit'] == 0]
-            race_pace_laps = valid_laps[valid_laps['LapTime'] <= (player_best * 1.07)] if player_best > 0 else valid_laps
+            all_laps = laps_df[laps_df['LapTime'] > 0].copy()
+            valid_laps = all_laps[all_laps['Pit'] == 0].copy()
+            
+            # Correction du biais de la pluie : Si la piste était humide, on élargit la fenêtre de "Race Pace" à 115%
+            max_wetness = valid_laps['Minimum Path Wetness'].max() if 'Minimum Path Wetness' in valid_laps.columns else 0.0
+            pace_threshold = 1.15 if pd.notna(max_wetness) and max_wetness > 0.1 else 1.07
+            
+            race_pace_laps = valid_laps[valid_laps['LapTime'] <= (player_best * pace_threshold)] if player_best > 0 else valid_laps
 
             # Fonction d'aide pour générer les stats d'un bouton
             def calc_pace(df_subset, override_time=None):
@@ -678,7 +683,7 @@ class XMLHistoryParser:
     # ==========================================
     def get_session_standings(self, filename, session_type):
         """Récupère le classement de fin de course, calcule les Gaps et les changements de positions."""
-        db_file = os.path.join(self.log_directory, filename)
+        db_file = os.path.join(self.db_directory, filename)
         if not os.path.exists(db_file): return None
         
         con = duckdb.connect(database=db_file, read_only=True)
@@ -776,7 +781,7 @@ class XMLHistoryParser:
     # LECTURE DES GRAPHIQUES (RACE CHARTS)
     # ==========================================
     def get_race_charts_data(self, filename, session_type):
-        db_file = os.path.join(self.log_directory, filename)
+        db_file = os.path.join(self.db_directory, filename)
         if not os.path.exists(db_file): return None
         con = duckdb.connect(database=db_file, read_only=True)
         try:
@@ -867,7 +872,7 @@ class XMLHistoryParser:
     # ==========================================
     def get_race_stats_data(self, filename, session_type):
         import re
-        db_file = os.path.join(self.log_directory, filename)
+        db_file = os.path.join(self.db_directory, filename)
         if not os.path.exists(db_file): return None
         con = duckdb.connect(database=db_file, read_only=True)
         try:
@@ -1089,7 +1094,7 @@ class XMLHistoryParser:
     def get_race_director_data(self, filename, session_type):
         """Récupère l'intégralité des événements du Stream XML."""
         import re
-        db_file = os.path.join(self.log_directory, filename)
+        db_file = os.path.join(self.db_directory, filename)
         if not os.path.exists(db_file): return None
         con = duckdb.connect(database=db_file, read_only=True)
         try:
@@ -1188,7 +1193,7 @@ class XMLHistoryParser:
     # ==========================================
     def get_your_charts_data(self, filename, session_type):
         """Récupère exclusivement tes données (JOLY) pour générer tes graphiques personnels."""
-        db_file = os.path.join(self.log_directory, filename)
+        db_file = os.path.join(self.db_directory, filename)
         if not os.path.exists(db_file): return None
         con = duckdb.connect(database=db_file, read_only=True)
         try:
@@ -1263,7 +1268,7 @@ class XMLHistoryParser:
     # ==========================================
     def get_session_chat(self, filename, session_type):
         """Récupère l'historique du Chat de la session."""
-        db_file = os.path.join(self.log_directory, filename)
+        db_file = os.path.join(self.db_directory, filename)
         if not os.path.exists(db_file): return None
         con = duckdb.connect(database=db_file, read_only=True)
         try:
@@ -1295,7 +1300,7 @@ class XMLHistoryParser:
 
     def get_personal_notes(self, filename):
         """Récupère les notes personnelles associées à ce fichier."""
-        db_file = os.path.join(self.log_directory, filename)
+        db_file = os.path.join(self.db_directory, filename)
         if not os.path.exists(db_file): return ""
         con = duckdb.connect(database=db_file, read_only=False) # Mode écriture autorisé pour créer la table
         try:
@@ -1312,7 +1317,7 @@ class XMLHistoryParser:
 
     def save_personal_notes(self, filename, notes_text):
         """Sauvegarde les notes dans la base de données de la session."""
-        db_file = os.path.join(self.log_directory, filename)
+        db_file = os.path.join(self.db_directory, filename)
         if not os.path.exists(db_file): return False
         con = duckdb.connect(database=db_file, read_only=False)
         try:
@@ -1330,7 +1335,7 @@ class XMLHistoryParser:
 
 
     def extract_lifetime_kpis(self):
-        search_pattern = os.path.join(self.log_directory, "imported_session_*.duckdb")
+        search_pattern = os.path.join(self.db_directory, "imported_session_*.duckdb")
         files = glob.glob(search_pattern)
         
         tracks = set()

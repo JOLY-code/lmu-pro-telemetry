@@ -145,8 +145,13 @@ while cap.isOpened():
             smooth_yaw = smooth_value(smooth_yaw, calibrated_yaw * SENSITIVITY)
             smooth_roll = smooth_value(smooth_roll, calibrated_roll * SENSITIVITY)
 
-            # 3. Envoi UDP
-            data = struct.pack("dddddd", 0.0, 0.0, 0.0, smooth_yaw, smooth_pitch, smooth_roll)
+           # 3. Envoi UDP (Activation du 6DOF : X, Y, Z + Rotations)
+            # Le vecteur tvec contient [X, Y, Z] en millimètres. On les adoucit (* 0.1) pour éviter la nausée.
+            tx = smooth_value(0.0, tvec[0][0] * 0.1, SMOOTHING)
+            ty = smooth_value(0.0, tvec[1][0] * 0.1, SMOOTHING)
+            tz = smooth_value(0.0, tvec[2][0] * 0.1, SMOOTHING)
+            
+            data = struct.pack("dddddd", tx, ty, tz, smooth_yaw, smooth_pitch, smooth_roll)
             sock.sendto(data, (UDP_IP, UDP_PORT))
 
             current_time = time.time() - start_time
