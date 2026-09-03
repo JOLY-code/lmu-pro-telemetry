@@ -2,6 +2,8 @@ import pandas as pd
 import numpy as np
 import scipy.fftpack
 
+from bop_manager import BoPManager
+
 class RaceEngineerLogic:
     """
     Moteur d'inférence d'ingénierie de course avancé.
@@ -150,18 +152,35 @@ class RaceEngineerLogic:
     # ==========================================
     # SUPERVISEUR DE RÉGLAGES (NOUVEAU)
     # ==========================================
-    def _tweak(self, section, key, delta, advice_fixed, limit_min=None, limit_max=None, is_incar_setting=False):
+    # Ajoute advice_fixed="" pour qu'il soit optionnel
+    def _tweak(self, section, key, delta, advice_fixed="", limit_min=None, limit_max=None, is_incar_setting=False):
         """
-        Le cœur du système intelligent.
-        is_incar_setting = True si le paramètre peut être changé depuis le volant en roulant.
+        Le cœur du système intelligent (Connecté à la Balance de Performance).
         """
         if getattr(self, 'is_fixed_setup', False) and not is_incar_setting:
             self.log(f"🔧 Adaptation Pilotage (Setup Fixe) : {advice_fixed}")
-        else:
-            # Action mécanique réelle (ou conseil de volant si en fixed setup)
-            self.sm.modify_parameter(section, key, delta, limit_min, limit_max)
-            if is_incar_setting and getattr(self, 'is_fixed_setup', False):
-                self.log(f"🔘 Modification In-Car autorisée : Change ton réglage de {key} directement sur ton volant.")
+            return
+
+        # --- VÉRIFICATION DES LIMITES LÉGALES DE LA BOP OFFICIELLE ---
+        if hasattr(self, 'bop_limits') and self.bop_limits:
+            # Sécurité sur la Hauteur de Caisse (Ride Height)
+            if 'RideHeight' in key and 'MinRideHeight' in self.bop_limits:
+                bop_min_rh = self.bop_limits["MinRideHeight"]
+                if delta < 0: # L'IA veut baisser la voiture
+                    self.log(f"⚖️ BOP LMU : Action annulée. Le règlement impose une hauteur minimale de {bop_min_rh}mm pour {self.current_car_model}.")
+                    return # Interdiction formelle
+                    
+            # Sécurité sur l'Aileron (Rear Wing)
+            if key == 'RWSetting':
+                if 'MaxRearwingAngle' in self.bop_limits and delta > 0:
+                    self.log(f"⚖️ BOP LMU : Attention, l'aileron max imposé est de {self.bop_limits['MaxRearwingAngle']} degrés.")
+                if 'MinRearwingAngle' in self.bop_limits and delta < 0:
+                    self.log(f"⚖️ BOP LMU : Attention, l'aileron min imposé est de {self.bop_limits['MinRearwingAngle']} degrés.")
+
+        # Action mécanique réelle
+        self.sm.modify_parameter(section, key, delta, limit_min, limit_max)
+        if is_incar_setting and getattr(self, 'is_fixed_setup', False):
+            self.log(f"🔘 Modif Volant autorisée (Fixed) : Règle {key} directement sur ton volant.")
 
     # ==========================================
     # MASTER CALL : 100% DATA-DRIVEN
@@ -184,6 +203,7 @@ class RaceEngineerLogic:
 
         if session_context:
             circuit = session_context.get('TrackName', 'Unknown Track')
+            self.current_track_name = circuit
             self.is_fixed_setup = bool(session_context.get('IsFixedSetup', False))
             self.current_car_model = session_context.get('VehicleName', 'Unknown')
             self.current_car_class = session_context.get('VehicleClass', 'Unknown')
@@ -203,14 +223,50 @@ class RaceEngineerLogic:
         self.log(f"📍 Piste : {circuit} | Météo : Air {ambient_temp:.1f}°C / Asphalte {track_temp:.1f}°C | Humidité sol : {pluie*100:.0f}%")
         self.log(f"🏎️ Véhicule : {self.current_car_model} ({self.current_car_class}) | ABS: {'Oui' if self.has_abs else 'Non'} | Règles: {'SETUP FIXE' if self.is_fixed_setup else 'SETUP OUVERT'}")
 
+        # --- INTÉGRATION EXHAUSTIVE DE LA BOP ---
+        bop = BoPManager()
+        self.bop_limits = bop.get_bop_limits(circuit, self.current_car_class, self.current_car_model)
+        
+        if self.bop_limits:
+            bop_weight = self.bop_limits.get("MinWeight", "N/A")
+            
+            # Gestion intelligente de la puissance selon la catégorie
+            if "MaxPowerStage1" in self.bop_limits:
+                bop_power = f"{self.bop_limits['MaxPowerStage1']} kW" if "HYPERCAR" in self.current_car_class.upper() else str(self.bop_limits['MaxPowerStage1'])
+            elif "PowerAdjustment" in self.bop_limits:
+                bop_power = f"Ajustement {self.bop_limits['PowerAdjustment']}%"
+            elif "Power" in self.bop_limits:
+                bop_power = str(self.bop_limits["Power"])
+            else:
+                bop_power = "Standard"
+
+            self.log(f"⚖️ CONFORMITÉ FIA : BoP chargée. Poids min : {bop_weight}kg | Puissance : {bop_power}")
+            
+            # Annonce spécifique des Power Stages (Hypercar/LMGT3)
+            if "PowerGainLossStage2" in self.bop_limits and self.bop_limits["PowerGainLossStage2"] not in [0.0, 0, None]:
+                v_start = self.bop_limits.get("Stage2Start", 250)
+                gain = self.bop_limits["PowerGainLossStage2"]
+                self.log(f"⚖️ BOP LMU : Moteur altéré ! Le règlement t'impose un {'gain' if gain > 0 else 'bridage'} de {gain}% au-delà de {v_start} km/h.")
+            
+            # Annonce spécifique LMP2 / LMP3 / GTE
+            if "AeroPackage" in self.bop_limits:
+                self.log(f"⚖️ RÈGLEMENT AÉRO : Ton package aéro obligatoire ici est '{self.bop_limits['AeroPackage']}'.")
+            if "BaseAeroPackage" in self.bop_limits:
+                self.log(f"⚖️ RÈGLEMENT AÉRO : Pack '{self.bop_limits['BaseAeroPackage']}' | Gurney Flap: {self.bop_limits.get('RearwingGurney', 'N/A')}.")
+
         if pluie > 0.1:
             self.log("⚠️ Humidité confirmée par les capteurs pneus.")
             
         self._adapt_setup_to_session_format(race_duration_minutes=duree, pluie=pluie)
         
-        # Capacité du réservoir dynamique selon le règlement de la catégorie (Hypercar ~90L, LMGT3 ~110L, LMP2 ~75L)
+        # --- CAPACITÉ DU RÉSERVOIR CONNECTÉE À LA BOP ---
         tank_cap = 110.0
-        if "hypercar" in self.current_car_class.lower() or "lmh" in self.current_car_class.lower(): tank_cap = 90.0
+        if self.bop_limits and "FuelTankCapacity" in self.bop_limits:
+            tank_cap = self.bop_limits["FuelTankCapacity"] # Vraie limite LMGTE / LMP2
+        elif self.bop_limits and "MaxStintEnergy" in self.bop_limits:
+            # Conversion approximative (MJ -> Eq. Litres) pour l'estimateur de LMU (Hypercar/LMGT3)
+            tank_cap = self.bop_limits["MaxStintEnergy"] / 8.5 
+        elif "hypercar" in self.current_car_class.lower() or "lmh" in self.current_car_class.lower(): tank_cap = 90.0
         elif "p2" in self.current_car_class.lower(): tank_cap = 75.0
         elif "p3" in self.current_car_class.lower(): tank_cap = 100.0
         
@@ -281,7 +337,7 @@ class RaceEngineerLogic:
             if max_steer > 80 and df['LatAccel'].max() < (max_g_comb * 0.85):
                 self.log("Diagnostic Cinématique : Sous-virage terminal détecté (Angle de glissement avant saturé).")
                 self.log("Action : Assouplissement de la barre anti-roulis avant (Front ARB) pour augmenter l'adhérence mécanique.")
-                self.sm.modify_parameter('SUSPENSION', 'FrontAntiSwaySetting', delta=-1)
+                self._tweak('SUSPENSION', 'FrontAntiSwaySetting', delta=-1)
             
             # Détection de Sur-Virage (Oversteer) au freinage (Trailbraking)
             elif 'YawRate' in df.columns:
@@ -289,8 +345,8 @@ class RaceEngineerLogic:
                 if not trailbraking_zones.empty and trailbraking_zones['YawRate'].max() > 45:
                     self.log("Diagnostic Cinématique : Taux de lacet (Yaw) excessif en phase de Trailbraking.")
                     self.log("Action : Le train arrière s'allège trop vite. Durcissement de la détente lente arrière (Rear Slow Rebound).")
-                    self.sm.modify_parameter('REARLEFT', 'SlowReboundSetting', delta=+1)
-                    self.sm.modify_parameter('REARRIGHT', 'SlowReboundSetting', delta=+1)
+                    self._tweak('REARLEFT', 'SlowReboundSetting', delta=+1)
+                    self._tweak('REARRIGHT', 'SlowReboundSetting', delta=+1)
 
     def _analyze_braking_and_slip_ratio(self, df):
         """MODÈLE MATHÉMATIQUE 2 : Slip Ratio et Phases de Coasting"""
@@ -315,12 +371,12 @@ class RaceEngineerLogic:
                 if min_slip_fl < -0.25:
                     self.log("Diagnostic : Micro-blocages destructeurs (Lock-ups) détectés à l'avant.")
                     self.log("Action : Recul de la répartition de freinage vers l'arrière (+1 Index Rear Brake).")
-                    self.sm.modify_parameter('CONTROLS', 'RearBrakeSetting', delta=+1)
+                    self._tweak('CONTROLS', 'RearBrakeSetting', delta=+1)
                 elif avg_slip_fl > -0.05:
                     self.log("Diagnostic Pilotage : Sous-exploitation du grip au freinage (Roues synchronisées avec la piste).")
                     if heavy_braking['Brake'].max() > 95:
                         self.log("Action : Tu écrases la pédale à 100% sans bloquer. Augmentation de la force max (Max Pedal Force).")
-                        self.sm.modify_parameter('CONTROLS', 'BrakePressureSetting', delta=+1)
+                        self._tweak('CONTROLS', 'BrakePressureSetting', delta=+1)
                     else:
                         self.log("Conseil : Tu peux freiner 15 à 20 mètres plus tard et appuyer plus fort.")
 
@@ -403,30 +459,35 @@ class RaceEngineerLogic:
                 if slip_diff > 0.15: 
                     self.log("Diagnostic : Perte de motricité sur la roue intérieure en sortie de virage.")
                     self.log("Action : Verrouillage du différentiel (Augmentation de la précharge / Preload).")
-                    self.sm.modify_parameter('DRIVELINE', 'DiffPreloadSetting', delta=+1)
+                    self._tweak('DRIVELINE', 'DiffPreloadSetting', delta=+1)
                     
                 # Cas B : La voiture refuse de tourner quand on remet les gaz (Sous-virage "on-throttle")
                 elif slip_diff < 0.02 and heavy_throttle['SteeringAngle'].max() > 45:
                     self.log("Diagnostic : La voiture pousse tout droit à la réaccélération (Différentiel trop verrouillé).")
                     self.log("Action : Ouverture du différentiel (Augmentation du Power Ramp Angle).")
-                    self.sm.modify_parameter('DRIVELINE', 'DiffPowerSetting', delta=-1)
+                    self._tweak('DRIVELINE', 'DiffPowerSetting', delta=-1)
 
     def _analyze_gearbox(self, df):
-        """Analyse de l'étagement de la boîte de vitesses (Final Drive)."""
+        """Analyse de l'étagement de la boîte de vitesses (Connectée à la BoP LMP2)."""
         if 'EngineRPM' in df.columns and 'EngineMaxRPM' in df.columns:
-            # On cherche si le moteur tape le rupteur (MaxRPM) sur de longues distances
-            df['AtLimiter'] = df['EngineRPM'] >= (df['EngineMaxRPM'] * 0.99)
+            
+            # Remplacement par la limite BOP si elle existe (ex: LMP2 à 8000 ou 8750 rpm)
+            max_rpm = df['EngineMaxRPM'].max()
+            if hasattr(self, 'bop_limits') and self.bop_limits and "MaxRPM" in self.bop_limits:
+                max_rpm = self.bop_limits["MaxRPM"]
+
+            df['AtLimiter'] = df['EngineRPM'] >= (max_rpm * 0.99)
             limiter_hits = df['AtLimiter'].sum()
             
             if limiter_hits > 30: # Environ 0.5s au rupteur à 60Hz
-                self.log("Diagnostic : Le moteur sature au rupteur en fin de ligne droite.")
+                self.log(f"Diagnostic : Le moteur sature au rupteur BOP ({max_rpm} rpm) en fin de ligne droite.")
                 self.log("Action : Allongement du rapport final (Final Drive) pour augmenter la VMax.")
-                self.sm.modify_parameter('DRIVELINE', 'FinalDriveSetting', delta=+1)
+                self._tweak('DRIVELINE', 'FinalDriveSetting', delta=+1)
                 
-            elif df['EngineRPM'].max() < (df['EngineMaxRPM'].max() * 0.92):
-                self.log("Diagnostic : Le dernier rapport est trop long, le moteur ne prend pas ses tours max.")
+            elif df['EngineRPM'].max() < (max_rpm * 0.92):
+                self.log(f"Diagnostic : Le dernier rapport est trop long, le moteur ne prend pas ses {max_rpm} tours max.")
                 self.log("Action : Raccourcissement du rapport final pour plus d'accélération.")
-                self.sm.modify_parameter('DRIVELINE', 'FinalDriveSetting', delta=-1)
+                self._tweak('DRIVELINE', 'FinalDriveSetting', delta=-1)
 
     def calculate_race_strategy(self, df, race_duration_minutes, tank_capacity_liters):
         """
@@ -459,6 +520,14 @@ class RaceEngineerLogic:
         self.log(f"Projection d'arrivée : {estimated_total_laps} tours.")
         self.log(f"Consommation relevée : {avg_fuel_per_lap:.2f} L/tour.")
         self.log(f"-> ORDRE GRILLE DE DÉPART : Embarque exactement {starting_fuel:.1f} Litres.")
+        
+        # --- NOUVEAU : STRATÉGIE AVEC BOP (Temps d'arrêt calculé) ---
+        if hasattr(self, 'bop_limits') and self.bop_limits:
+            if "RefuelRate" in self.bop_limits:
+                pit_time = tank_capacity_liters / self.bop_limits["RefuelRate"]
+                self.log(f"⏱️ INFOS STANDS : Un ravitaillement complet prendra {pit_time:.1f}s (Débit FIA: {self.bop_limits['RefuelRate']} L/s).")
+            elif "DockingTime" in self.bop_limits:
+                self.log(f"⏱️ INFOS STANDS : Le temps de connexion de la perche (Docking Time) est de {self.bop_limits['DockingTime']}s.")
         
         # Logique d'arrêts et de pneus
         if number_of_pitstops == 0:
@@ -494,8 +563,8 @@ class RaceEngineerLogic:
             
             # On applique une modification, mais AVEC des limites strictes pour ne pas rendre la voiture instable
             # Exemple : On refuse de descendre l'aileron arrière en dessous de la valeur 3 (pour ne pas perdre l'arrière)
-            self.sm.modify_parameter('FRONTWING', 'FWSetting', delta=+1, limit_max=5)
-            self.sm.modify_parameter('REARWING', 'RWSetting', delta=-1, limit_min=3)
+            self._tweak('FRONTWING', 'FWSetting', delta=+1, limit_max=5)
+            self._tweak('REARWING', 'RWSetting', delta=-1, limit_min=3)
             
             self.log("⚠️ Attention radio : Le train avant va être plus mordant. Garde tes repères de freinage mais attaque l'apex plus fort.")
 
@@ -530,8 +599,8 @@ class RaceEngineerLogic:
             self.log(f"🚨 Diagnostic Stratégique : Tu es à +{delta_to_leader:.1f}s du leader. Setup non compétitif ou pilotage en sur-régime.")
             self.log("Ordre : On va assouplir la voiture pour te redonner de la confiance.")
             # L'IA prend l'initiative d'assouplir les barres anti-roulis pour rendre la voiture plus docile
-            self.sm.modify_parameter('SUSPENSION', 'FrontAntiSwaySetting', delta=-1)
-            self.sm.modify_parameter('SUSPENSION', 'RearAntiSwaySetting', delta=-1)
+            self._tweak('SUSPENSION', 'FrontAntiSwaySetting', delta=-1)
+            self._tweak('SUSPENSION', 'RearAntiSwaySetting', delta=-1)
         
     def _adapt_setup_to_session_format(self, race_duration_minutes, pluie=0.0):
         """
@@ -541,34 +610,40 @@ class RaceEngineerLogic:
         
         if pluie > 0.1:
             self.log("🌧️ PROTOCOLE PLUIE ACTIVÉ : Assouplissement général du châssis et hausse de caisse pour l'évacuation de l'eau.")
-            self.sm.modify_parameter('SUSPENSION', 'FrontAntiSwaySetting', delta=-2, limit_min=0)
-            self.sm.modify_parameter('SUSPENSION', 'RearAntiSwaySetting', delta=-2, limit_min=0)
-            self.sm.modify_parameter('FRONTLEFT', 'RideHeightSetting', delta=+2)
-            self.sm.modify_parameter('FRONTRIGHT', 'RideHeightSetting', delta=+2)
-            self.sm.modify_parameter('REARLEFT', 'RideHeightSetting', delta=+2)
-            self.sm.modify_parameter('REARRIGHT', 'RideHeightSetting', delta=+2)
+            self._tweak('SUSPENSION', 'FrontAntiSwaySetting', delta=-2, limit_min=0)
+            self._tweak('SUSPENSION', 'RearAntiSwaySetting', delta=-2, limit_min=0)
+            self._tweak('FRONTLEFT', 'RideHeightSetting', delta=+2)
+            self._tweak('FRONTRIGHT', 'RideHeightSetting', delta=+2)
+            self._tweak('REARLEFT', 'RideHeightSetting', delta=+2)
+            self._tweak('REARRIGHT', 'RideHeightSetting', delta=+2)
             # Sous la pluie, on veut des réactions lentes
-            self.sm.modify_parameter('FRONTLEFT', 'SlowBumpSetting', delta=-1)
-            self.sm.modify_parameter('REARLEFT', 'SlowBumpSetting', delta=-1)
+            self._tweak('FRONTLEFT', 'SlowBumpSetting', delta=-1)
+            self._tweak('REARLEFT', 'SlowBumpSetting', delta=-1)
 
         elif race_duration_minutes <= 60:
             self.log("Mode SPRINT : Fermeture des radiateurs et écopes (Gain de VMax).")
-            self.sm.modify_parameter('BODYAERO', 'WaterRadiatorSetting', delta=-1, limit_min=2)
-            self.sm.modify_parameter('FRONTLEFT', 'BrakeDuctSetting', delta=-1, limit_min=1)
-            self.sm.modify_parameter('FRONTRIGHT', 'BrakeDuctSetting', delta=-1, limit_min=1)
-            self.sm.modify_parameter('REARLEFT', 'BrakeDuctSetting', delta=-1, limit_min=1)
-            self.sm.modify_parameter('REARRIGHT', 'BrakeDuctSetting', delta=-1, limit_min=1)
+            self._tweak('BODYAERO', 'WaterRadiatorSetting', delta=-1, limit_min=2)
+            self._tweak('FRONTLEFT', 'BrakeDuctSetting', delta=-1, limit_min=1)
+            self._tweak('FRONTRIGHT', 'BrakeDuctSetting', delta=-1, limit_min=1)
+            self._tweak('REARLEFT', 'BrakeDuctSetting', delta=-1, limit_min=1)
+            self._tweak('REARRIGHT', 'BrakeDuctSetting', delta=-1, limit_min=1)
         else:
             self.log("Mode ENDURANCE : Ouverture du refroidissement et sécurisation du fond plat.")
-            self.sm.modify_parameter('BODYAERO', 'WaterRadiatorSetting', delta=+1, limit_max=5)
-            self.sm.modify_parameter('FRONTLEFT', 'RideHeightSetting', delta=+1)
-            self.sm.modify_parameter('FRONTRIGHT', 'RideHeightSetting', delta=+1)
+            self._tweak('BODYAERO', 'WaterRadiatorSetting', delta=+1, limit_max=5)
+            self._tweak('FRONTLEFT', 'RideHeightSetting', delta=+1)
+            self._tweak('FRONTRIGHT', 'RideHeightSetting', delta=+1)
 
     def _analyze_hybrid_deployment(self, df):
         """
         Analyse de l'utilisation de l'énergie électrique (Hypercar ERS).
         Vérifie si le pilote vide sa batterie trop vite ou ne l'utilise pas assez.
         """
+        # --- NOUVEAU : VÉRIFICATION RÉGLEMENTAIRE HYBRIDE (BOP) ---
+        if hasattr(self, 'bop_limits') and self.bop_limits and "DeployActivationSpeed" in self.bop_limits:
+            activation_speed = self.bop_limits["DeployActivationSpeed"]
+            if activation_speed > 0:
+                self.log(f"⚖️ BOP LMU : Attention, le règlement t'interdit de déployer l'hybride en dessous de {activation_speed} km/h sur ce circuit.")
+
         if 'BatteryCharge' in df.columns:
             min_battery = df['BatteryCharge'].min()
             max_battery = df['BatteryCharge'].max()
@@ -582,24 +657,6 @@ class RaceEngineerLogic:
             elif max_battery < 20.0:
                 self.log("Diagnostic (ERS) : Batterie constamment vide. Tu 'clippes' en fin de ligne droite (perte de VMax).")
                 self.log("Action : Baisse ton mode de déploiement (sélectionne Balanced ou No Deploy dans les parties sinueuses).")
-
-    def _analyze_wear_and_damage(self, df):
-        """
-        Surveille l'intégrité de la voiture (Dégâts Aéro et Usure Pneus extrême).
-        """
-        if 'AeroDamage' in df.columns and df['AeroDamage'].max() > 0.05:
-            degats_pct = df['AeroDamage'].max() * 100
-            self.log(f"🚨 ALERTE DÉGÂTS : Perte d'appui aéro détectée ({degats_pct:.1f}%).")
-            self.log("Action : La voiture va fortement sous-virer à haute vitesse. Anticipe tes freinages et ajoute de l'aileron au prochain arrêt.")
-            # L'IA compense les dégâts en modifiant le setup
-            self.sm.modify_parameter('FRONTWING', 'FWSetting', delta=+1)
-            
-        if 'TireWearFL' in df.columns:
-            wear_fl = df['TireWearFL'].max()
-            if wear_fl > 30.0:
-                self.log(f"⚠️ Usure critique Pneu Avant Gauche : {wear_fl:.1f}%.")
-                self.log("Action : Déplace la répartition de freinage (Brake Bias) vers l'arrière pour soulager l'avant sous peine de crevaison.")
-                self.sm.modify_parameter('CONTROLS', 'RearBrakeSetting', delta=+1)
 
     def process_live_telemetry(self, live_data):
         """
@@ -724,7 +781,7 @@ class RaceEngineerLogic:
                 
                 if abs(total_correction_kpa) > 0.5:
                     self.log(f"[{section}] Pression à chaud: {actual_hot:.1f} kPa. Cible {target_hot_pressure}. Correc: {total_correction_kpa:+.1f} kPa.")
-                    self.sm.modify_parameter(section, key, delta=int(round(total_correction_kpa)))
+                    self._tweak(section, key, delta=int(round(total_correction_kpa)))
                 else:
                     self.log(f"[{section}] Pression optimale confirmée ({actual_hot:.1f} kPa).")
 
@@ -751,7 +808,7 @@ class RaceEngineerLogic:
                 
                 # NOUVEAU : On durcit la compression rapide du 3ème amortisseur pour limiter l'écrasement aéro !
                 self.log("Action secondaire : Durcissement du 3ème amortisseur avant (Fast Bump) pour soutenir la plateforme aéro.")
-                self.sm.modify_parameter('FRONTTHIRD', 'FastBumpSetting', delta=+1)
+                self._tweak('FRONTTHIRD', 'FastBumpSetting', delta=+1)
                 
             avg_rake = avg_data['RearRideHeight'] - avg_data['FrontRideHeight']
             if avg_rake < 0.010: # Moins de 10mm de Rake
@@ -802,7 +859,7 @@ class RaceEngineerLogic:
                 if max_rear_temp > 95.0:
                     self.log("Diagnostic (Mustang) : Ton V8 détruit les gommes arrière en sortie de courbe lente.")
                     self.log("Action : Assouplissement de la barre anti-roulis (ARB) arrière.")
-                    self.sm.modify_parameter('SUSPENSION', 'RearAntiSwaySetting', delta=-1)
+                    self._tweak('SUSPENSION', 'RearAntiSwaySetting', delta=-1)
 
         elif "911" in car or "Porsche" in car:
             if 'TopSpeed' in df.columns:
@@ -815,14 +872,14 @@ class RaceEngineerLogic:
                 if not heavy_steering.empty and heavy_steering['Throttle'].mean() > 40:
                     self.log("Diagnostic (Huracán) : Sous-virage naturel détecté au point de corde sous légère accélération.")
                     self.log("Action : Réduction de l'angle de rampe de puissance du différentiel (Power Ramp Angle).")
-                    self.sm.modify_parameter('DRIVELINE', 'DiffPowerSetting', delta=-1)
+                    self._tweak('DRIVELINE', 'DiffPowerSetting', delta=-1)
 
         elif "Vantage" in car or "Aston" in car:
             if 'LatAccel' in df.columns:
                 if df['LatAccel'].max() < 1.3:
                     self.log("Diagnostic (Vantage) : Plateforme stable mais paresseuse à l'inscription (manque de turn-in).")
                     self.log("Action : Augmentation du pincement négatif (Toe-out) à l'avant pour un train avant plus incisif.")
-                    self.sm.modify_parameter('SUSPENSION', 'FrontToeInSetting', delta=-1)
+                    self._tweak('SUSPENSION', 'FrontToeInSetting', delta=-1)
 
         elif "M4" in car or "BMW" in car:
             if 'SteeringAngle' in df.columns and 'Speed' in df.columns:
@@ -830,8 +887,8 @@ class RaceEngineerLogic:
                 if not slow_corners.empty:
                     self.log("Diagnostic (BMW M4) : Empattement long, la voiture peine à pivoter dans les épingles.")
                     self.log("Action : Augmentation de la hauteur de caisse arrière (Rake) pour déplacer le centre de pression vers l'avant.")
-                    self.sm.modify_parameter('REARLEFT', 'RideHeightSetting', delta=+1)
-                    self.sm.modify_parameter('REARRIGHT', 'RideHeightSetting', delta=+1)
+                    self._tweak('REARLEFT', 'RideHeightSetting', delta=+1)
+                    self._tweak('REARRIGHT', 'RideHeightSetting', delta=+1)
 
         elif "Corvette" in car or "Z06" in car:
             if 'WheelSlipRL' in df.columns and 'Throttle' in df.columns:
@@ -839,30 +896,30 @@ class RaceEngineerLogic:
                 if not heavy_throttle.empty and heavy_throttle['WheelSlipRL'].max() > 0.1:
                     self.log("Diagnostic (Corvette) : L'arrière décroche brutalement (snap oversteer) à la reprise des gaz.")
                     self.log("Action : Durcissement de la détente lente (Slow Rebound) arrière pour ralentir le transfert de masse latéral.")
-                    self.sm.modify_parameter('REARLEFT', 'SlowReboundSetting', delta=+1)
-                    self.sm.modify_parameter('REARRIGHT', 'SlowReboundSetting', delta=+1)
+                    self._tweak('REARLEFT', 'SlowReboundSetting', delta=+1)
+                    self._tweak('REARRIGHT', 'SlowReboundSetting', delta=+1)
 
         elif "296" in car or "Ferrari" in car:
             if 'RideHeightFront' in df.columns:
                 if df['RideHeightFront'].min() < 0.15:
                     self.log("Diagnostic (Ferrari 296) : Très sensible au fond plat. L'aéro décroche si tu frottes trop fort.")
                     self.log("Action : Durcissement des butées avant (Front Packers) pour stabiliser la plateforme aéro.")
-                    self.sm.modify_parameter('FRONTLEFT', 'PackerSetting', delta=+1)
-                    self.sm.modify_parameter('FRONTRIGHT', 'PackerSetting', delta=+1)
+                    self._tweak('FRONTLEFT', 'PackerSetting', delta=+1)
+                    self._tweak('FRONTRIGHT', 'PackerSetting', delta=+1)
 
         elif "Lexus" in car or "RC F" in car:
             if 'TopSpeed' in df.columns:
                 self.log("Diagnostic (Lexus) : Forte traînée aéro, déficit de VMax en ligne droite.")
                 self.log("Conseil : Privilégie un appui aéro réduit (aileron plus plat).")
-                self.sm.modify_parameter('REARWING', 'RWSetting', delta=-1)
+                self._tweak('REARWING', 'RWSetting', delta=-1)
 
         elif "720S" in car or "McLaren" in car:
             if 'SuspensionVelocityFL' in df.columns:
                 if df['SuspensionVelocityFL'].max() > 0.3:
                     self.log("Diagnostic (McLaren) : Châssis très rigide, tu perds le contact sur les gros vibreurs.")
                     self.log("Action : Assouplissement de la compression lente et rapide (Bump) pour mieux absorber les chocs.")
-                    self.sm.modify_parameter('FRONTLEFT', 'FastBumpSetting', delta=-1)
-                    self.sm.modify_parameter('FRONTRIGHT', 'FastBumpSetting', delta=-1)
+                    self._tweak('FRONTLEFT', 'FastBumpSetting', delta=-1)
+                    self._tweak('FRONTRIGHT', 'FastBumpSetting', delta=-1)
 
         elif "AMG" in car or "Mercedes" in car:
             if 'SteeringAngle' in df.columns and 'Speed' in df.columns:
@@ -870,8 +927,8 @@ class RaceEngineerLogic:
                 if not fast_sweepers.empty:
                     self.log("Diagnostic (Mercedes-AMG) : Tendance au sous-virage aérodynamique dans les courbes rapides.")
                     self.log("Action : Baisse de la hauteur de caisse avant.")
-                    self.sm.modify_parameter('FRONTLEFT', 'RideHeightSetting', delta=-1)
-                    self.sm.modify_parameter('FRONTRIGHT', 'RideHeightSetting', delta=-1)
+                    self._tweak('FRONTLEFT', 'RideHeightSetting', delta=-1)
+                    self._tweak('FRONTRIGHT', 'RideHeightSetting', delta=-1)
 
         if 'Brake' in df.columns and 'Throttle' in df.columns and 'LatAccel' in df.columns:
             coasting = df[(df['Brake'] == 0) & (df['Throttle'] == 0) & (abs(df['LatAccel']) > 1.0)]
@@ -886,11 +943,11 @@ class RaceEngineerLogic:
         if "9X8" in car:
             if "2023" in car:
                 self.log("Action (9X8 2023 Wingless) : Le Rake (assiette plongeante) doit être maximal.")
-                self.sm.modify_parameter('REARLEFT', 'RideHeightSetting', delta=+1)
-                self.sm.modify_parameter('REARRIGHT', 'RideHeightSetting', delta=+1)
+                self._tweak('REARLEFT', 'RideHeightSetting', delta=+1)
+                self._tweak('REARRIGHT', 'RideHeightSetting', delta=+1)
             else:
                 self.log("Action (9X8 2024 Winged) : Assouplissement de la barre anti-roulis (ARB) avant pour redonner du pouvoir directionnel.")
-                self.sm.modify_parameter('SUSPENSION', 'FrontAntiSwaySetting', delta=-1)
+                self._tweak('SUSPENSION', 'FrontAntiSwaySetting', delta=-1)
 
         elif any(m in car for m in ["GR010", "TR010", "499P", "Tipo 6"]):
             if 'Speed' in df.columns and 'LatAccel' in df.columns and 'SteeringAngle' in df.columns:
@@ -904,26 +961,29 @@ class RaceEngineerLogic:
                 if not power_oversteer.empty:
                     self.log(f"Diagnostic ({car}) : Sur-couple du MGU arrière détecté en sortie de courbe lente.")
                     self.log("Action : Durcissement des ressorts arrière (Springs) pour asseoir la puissance.")
-                    self.sm.modify_parameter('REARLEFT', 'SpringSetting', delta=+1)
-                    self.sm.modify_parameter('REARRIGHT', 'SpringSetting', delta=+1)
+                    self._tweak('REARLEFT', 'SpringSetting', delta=+1)
+                    self._tweak('REARRIGHT', 'SpringSetting', delta=+1)
             
             if any(m in car for m in ["Cadillac", "V-Series.R", "Hybrid V8"]):
                 if df.get('RideHeightFront', pd.Series([1])).min() < 0.15:
                     self.log("Action (Châssis Dallara) : Assouplissement extrême de l'hydraulique en compression rapide (Fast Bump).")
-                    self.sm.modify_parameter('FRONTLEFT', 'FastBumpSetting', delta=-2)
-                    self.sm.modify_parameter('FRONTRIGHT', 'FastBumpSetting', delta=-2)
+                    self._tweak('FRONTLEFT', 'FastBumpSetting', delta=-2)
+                    self._tweak('FRONTRIGHT', 'FastBumpSetting', delta=-2)
 
         elif any(m in car for m in ["Valkyrie", "SCG 007", "Vandervell"]):
             if 'BrakeTempFL' in df.columns:
                 max_brake_temp = df['BrakeTempFL'].max()
                 if max_brake_temp > 600:
                     self.log("Action (Urgent) : Surchauffe critique des freins détectée. Ouverture des écopes de freins (Brake Ducts).")
-                    self.sm.modify_parameter('FRONTLEFT', 'BrakeDuctSetting', delta=+1)
-                    self.sm.modify_parameter('FRONTRIGHT', 'BrakeDuctSetting', delta=+1)
+                    self._tweak('FRONTLEFT', 'BrakeDuctSetting', delta=+1)
+                    self._tweak('FRONTRIGHT', 'BrakeDuctSetting', delta=+1)
 
     def _analyze_lmp3_specifics(self, df):
         """Analyse comportementale ciblée pour la catégorie LMP3."""
         self.log("--- ANALYSE DYNAMIQUE SPÉCIFIQUE LMP3 ---")
+        if hasattr(self, 'bop_limits') and self.bop_limits:
+            self.log(f"⚖️ BOP LMU : Aéro imposée -> Dive Plane: {self.bop_limits.get('FrontDivePlane', 'N/A')} | Gurney Capot: {self.bop_limits.get('EngineCoverGurney', 'N/A')}")
+            
         car = self.current_car_model
 
         if 'Brake' in df.columns and 'WheelSpeedFL' in df.columns and 'TopSpeed' in df.columns:
@@ -931,31 +991,33 @@ class RaceEngineerLogic:
             if len(front_lockups) > 5:
                 self.log("🚨 ALERTE PILOTAGE (LMP3) : Tu bloques violemment les roues avant au freinage (Aucun ABS pour te sauver).")
                 self.log("Action : L'IA recule la répartition de freinage (Brake Bias) vers l'arrière.")
-                self.sm.modify_parameter('CONTROLS', 'RearBrakeSetting', delta=+1)
+                self._tweak('CONTROLS', 'RearBrakeSetting', delta=+1)
 
         if "Ginetta" in car or "G61" in car:
             if 'YawRate' in df.columns and 'Brake' in df.columns:
                 trailbrake_oversteer = df[(df['Brake'] > 5) & (df['Brake'] < 40) & (abs(df['YawRate']) > 45)]
                 if not trailbrake_oversteer.empty:
                     self.log("Action (Ginetta) : Augmentation de la barre anti-roulis arrière (Rear ARB) pour stabiliser la plateforme en entrée de virage.")
-                    self.sm.modify_parameter('SUSPENSION', 'RearAntiSwaySetting', delta=+1)
+                    self._tweak('SUSPENSION', 'RearAntiSwaySetting', delta=+1)
 
         elif "Ligier" in car or "P325" in car:
             if 'Speed' in df.columns and 'SteeringAngle' in df.columns:
                 slow_understeer = df[(df['Speed'] < 110) & (df['SteeringAngle'] > 80)]
                 if not slow_understeer.empty:
                     self.log("Action (Ligier) : Assouplissement des ressorts avant (Front Springs) pour forcer le nez à s'inscrire.")
-                    self.sm.modify_parameter('FRONTLEFT', 'SpringSetting', delta=-1)
-                    self.sm.modify_parameter('FRONTRIGHT', 'SpringSetting', delta=-1)
+                    self._tweak('FRONTLEFT', 'SpringSetting', delta=-1)
+                    self._tweak('FRONTRIGHT', 'SpringSetting', delta=-1)
 
         elif "Adess" in car or "AD25" in car:
             if 'TopSpeed' in df.columns:
                 self.log("Action (Adess) : Baisse drastique de l'aileron arrière pour compenser le manque de grip par une VMax agressive.")
-                self.sm.modify_parameter('REARWING', 'RWSetting', delta=-1)
+                self._tweak('REARWING', 'RWSetting', delta=-1)
 
     def _analyze_lmp2_specifics(self, df):
         """Analyse comportementale ciblée pour la catégorie LMP2 (Oreca 07)."""
         self.log("--- ANALYSE DYNAMIQUE SPÉCIFIQUE LMP2 (ORECA 07) ---")
+        if hasattr(self, 'bop_limits') and self.bop_limits:
+            self.log(f"⚖️ BOP LMU : Aéro imposée -> Pack {self.bop_limits.get('BaseAeroPackage', 'N/A')} | Dive Planes: {self.bop_limits.get('FrontDivePlanes', 'N/A')} | Gurneys (Capot: {self.bop_limits.get('EngineCoverGurney', 'N/A')}, Aileron: {self.bop_limits.get('RearwingGurney', 'N/A')}) | Diffuseur: {self.bop_limits.get('DiffuserStrakes', 'N/A')}")
 
         if 'RideHeightFront' in df.columns and 'RideHeightRear' in df.columns and 'TopSpeed' in df.columns:
             high_speed = df[df['TopSpeed'] > 220]
@@ -965,12 +1027,12 @@ class RaceEngineerLogic:
                 if (avg_rear_rh - avg_front_rh) < 0.010: 
                     self.log("Diagnostic (Oreca 07) : Ton train arrière s'écrase trop à haute vitesse. Tu perds l'effet de sol (Stall).")
                     self.log("Action : Augmentation de la hauteur de caisse statique à l'arrière.")
-                    self.sm.modify_parameter('REARLEFT', 'RideHeightSetting', delta=+1)
-                    self.sm.modify_parameter('REARRIGHT', 'RideHeightSetting', delta=+1)
+                    self._tweak('REARLEFT', 'RideHeightSetting', delta=+1)
+                    self._tweak('REARRIGHT', 'RideHeightSetting', delta=+1)
                     
                     # NOUVEAU : On empêche l'arrière de s'écraser avec le 3ème amortisseur
                     self.log("Action secondaire : Durcissement du 3ème amortisseur arrière (Fast Bump) pour empêcher l'écrasement.")
-                    self.sm.modify_parameter('REARTHIRD', 'FastBumpSetting', delta=+1)
+                    self._tweak('REARTHIRD', 'FastBumpSetting', delta=+1)
 
         if 'TireTempFL_O' in df.columns and 'TireTempFR_O' in df.columns and 'LatAccel' in df.columns:
             heavy_lateral = df[abs(df['LatAccel']) > 2.0]
@@ -979,11 +1041,14 @@ class RaceEngineerLogic:
                 temp_fr_out = heavy_lateral['TireTempFR_O'].mean()
                 if max(temp_fl_out, temp_fr_out) > 100.0:
                     self.log("Action : Assouplissement de la barre anti-roulis avant (Front ARB) pour réduire la force latérale transférée au pneu extérieur.")
-                    self.sm.modify_parameter('SUSPENSION', 'FrontAntiSwaySetting', delta=-1)
+                    self._tweak('SUSPENSION', 'FrontAntiSwaySetting', delta=-1)
 
     def _analyze_gte_specifics(self, df):
         """Analyse comportementale ciblée pour la catégorie GTE."""
         self.log("--- ANALYSE DYNAMIQUE SPÉCIFIQUE GTE ---")
+        if hasattr(self, 'bop_limits') and self.bop_limits:
+            self.log(f"⚖️ BOP LMU : Aéro imposée -> Package {self.bop_limits.get('AeroPackage', 'N/A')}")
+            
         car = self.current_car_model
 
         if 'Brake' in df.columns and 'WheelSpeedFL' in df.columns and 'TopSpeed' in df.columns:
@@ -991,7 +1056,7 @@ class RaceEngineerLogic:
             if len(front_lockups) > 3:
                 self.log("🚨 ALERTE FREINAGE (GTE) : Tu attaques la pédale de frein trop fort. Aucun ABS ne te protège, tes roues avant bloquent.")
                 self.log("Action : Recul immédiat de la répartition de freinage (Brake Bias) vers l'arrière.")
-                self.sm.modify_parameter('CONTROLS', 'RearBrakeSetting', delta=+1)
+                self._tweak('CONTROLS', 'RearBrakeSetting', delta=+1)
             
             hard_braking = df[df['Brake'] > 90]
             if not hard_braking.empty and hard_braking['Brake'].mean() > 95:
@@ -1003,29 +1068,29 @@ class RaceEngineerLogic:
                 avg_rear = df['RideHeightRear'].mean()
                 if (avg_rear - avg_front) < 0.015:
                     self.log("Action (911 RSR) : Augmentation de la hauteur de caisse arrière pour créer plus d'appui aérodynamique.")
-                    self.sm.modify_parameter('REARLEFT', 'RideHeightSetting', delta=+1)
-                    self.sm.modify_parameter('REARRIGHT', 'RideHeightSetting', delta=+1)
+                    self._tweak('REARLEFT', 'RideHeightSetting', delta=+1)
+                    self._tweak('REARRIGHT', 'RideHeightSetting', delta=+1)
 
         elif "488" in car or "Ferrari" in car:
             if 'WheelSlipRL' in df.columns and 'SteeringAngle' in df.columns:
                 snap_oversteer = df[(df['WheelSlipRL'] > 0.15) & (abs(df['SteeringAngle']) > 30)]
                 if not snap_oversteer.empty:
                     self.log("Action (488 GTE) : Assouplissement de la barre anti-roulis arrière (Rear ARB) pour calmer le train arrière à la limite.")
-                    self.sm.modify_parameter('SUSPENSION', 'RearAntiSwaySetting', delta=-1)
+                    self._tweak('SUSPENSION', 'RearAntiSwaySetting', delta=-1)
 
         elif "C8.R" in car or "Corvette" in car:
             if 'SuspensionVelocityFL' in df.columns:
                 kerb_strikes = df[df['SuspensionVelocityFL'] > 0.4]
                 if not kerb_strikes.empty:
                     self.log("Action (C8.R) : Ouverture radicale de la compression rapide (Fast Bump) pour absorber les chocs.")
-                    self.sm.modify_parameter('FRONTLEFT', 'FastBumpSetting', delta=-1)
-                    self.sm.modify_parameter('FRONTRIGHT', 'FastBumpSetting', delta=-1)
+                    self._tweak('FRONTLEFT', 'FastBumpSetting', delta=-1)
+                    self._tweak('FRONTRIGHT', 'FastBumpSetting', delta=-1)
 
         elif "Vantage GTE" in car or "Aston" in car:
             if 'TireTempRL_M' in df.columns and 'Throttle' in df.columns:
                 if df['TireTempRL_M'].max() > 95.0:
                     self.log("Action (Vantage GTE) : Durcissement du différentiel à l'accélération (Power) pour éviter qu'une roue ne patine.")
-                    self.sm.modify_parameter('DRIVELINE', 'DiffPowerSetting', delta=+1)
+                    self._tweak('DRIVELINE', 'DiffPowerSetting', delta=+1)
 
     def _analyze_track_specifics(self, track_name, df):
         """Analyse croisée entre la télémétrie et la topologie spécifique du circuit."""
@@ -1034,59 +1099,59 @@ class RaceEngineerLogic:
 
         if any(t.lower() in track_lower for t in self.track_database['low_drag']):
             self.log("Diagnostic Piste : Circuit à très faible traînée (Low Drag). Priorité absolue à la VMax.")
-            self.sm.modify_parameter('REARLEFT', 'RideHeightSetting', delta=-1)
-            self.sm.modify_parameter('REARRIGHT', 'RideHeightSetting', delta=-1)
-            self.sm.modify_parameter('REARWING', 'RWSetting', delta=-1)
-            self.sm.modify_parameter('SUSPENSION', 'RearToeInSetting', delta=-1)
-            self.sm.modify_parameter('SUSPENSION', 'FrontToeInSetting', delta=+1)
+            self._tweak('REARLEFT', 'RideHeightSetting', delta=-1)
+            self._tweak('REARRIGHT', 'RideHeightSetting', delta=-1)
+            self._tweak('REARWING', 'RWSetting', delta=-1)
+            self._tweak('SUSPENSION', 'RearToeInSetting', delta=-1)
+            self._tweak('SUSPENSION', 'FrontToeInSetting', delta=+1)
 
             if "daytona" in track_lower:
                 self.log("Action (Roval) : Asymétrie pour le banking. Durcissement des ressorts droits.")
-                self.sm.modify_parameter('FRONTRIGHT', 'SpringSetting', delta=+1)
-                self.sm.modify_parameter('REARRIGHT', 'SpringSetting', delta=+1)
+                self._tweak('FRONTRIGHT', 'SpringSetting', delta=+1)
+                self._tweak('REARRIGHT', 'SpringSetting', delta=+1)
 
         elif any(t.lower() in track_lower for t in self.track_database['bumpy']):
             self.log("Diagnostic Piste : Surface très bosselée / Vibreurs agressifs détectés.")
             if "sebring" in track_lower:
-                self.sm.modify_parameter('FRONTLEFT', 'RideHeightSetting', delta=+1)
-                self.sm.modify_parameter('FRONTRIGHT', 'RideHeightSetting', delta=+1)
-                self.sm.modify_parameter('REARLEFT', 'SlowReboundSetting', delta=-1)
-                self.sm.modify_parameter('REARRIGHT', 'SlowReboundSetting', delta=-1)
+                self._tweak('FRONTLEFT', 'RideHeightSetting', delta=+1)
+                self._tweak('FRONTRIGHT', 'RideHeightSetting', delta=+1)
+                self._tweak('REARLEFT', 'SlowReboundSetting', delta=-1)
+                self._tweak('REARRIGHT', 'SlowReboundSetting', delta=-1)
             elif "imola" in track_lower:
-                self.sm.modify_parameter('FRONTLEFT', 'SpringSetting', delta=-1)
-                self.sm.modify_parameter('FRONTRIGHT', 'SpringSetting', delta=-1)
-                self.sm.modify_parameter('REARLEFT', 'SpringSetting', delta=-1)
-                self.sm.modify_parameter('REARRIGHT', 'SpringSetting', delta=-1)
+                self._tweak('FRONTLEFT', 'SpringSetting', delta=-1)
+                self._tweak('FRONTRIGHT', 'SpringSetting', delta=-1)
+                self._tweak('REARLEFT', 'SpringSetting', delta=-1)
+                self._tweak('REARRIGHT', 'SpringSetting', delta=-1)
 
         elif any(t.lower() in track_lower for t in self.track_database['technical_abrasive']):
             self.log("Diagnostic Piste : Tracé technique avec freinage en appui et forte dégradation des pneus.")
             if "bahrain" in track_lower or "bahreïn" in track_lower:
-                self.sm.modify_parameter('CONTROLS', 'RearBrakeSetting', delta=-1) 
-                self.sm.modify_parameter('DRIVELINE', 'DiffCoastSetting', delta=-1)
+                self._tweak('CONTROLS', 'RearBrakeSetting', delta=-1) 
+                self._tweak('DRIVELINE', 'DiffCoastSetting', delta=-1)
             elif "portimao" in track_lower or "algarve" in track_lower:
-                self.sm.modify_parameter('FRONTLEFT', 'SlowBumpSetting', delta=-1)
-                self.sm.modify_parameter('FRONTRIGHT', 'SlowBumpSetting', delta=-1)
+                self._tweak('FRONTLEFT', 'SlowBumpSetting', delta=-1)
+                self._tweak('FRONTRIGHT', 'SlowBumpSetting', delta=-1)
             elif "barcelona" in track_lower or "catalunya" in track_lower:
-                self.sm.modify_parameter('FRONTLEFT', 'CamberSetting', delta=+1) 
-                self.sm.modify_parameter('FRONTWING', 'FWSetting', delta=+1)
-                self.sm.modify_parameter('REARWING', 'RWSetting', delta=+1)
+                self._tweak('FRONTLEFT', 'CamberSetting', delta=+1) 
+                self._tweak('FRONTWING', 'FWSetting', delta=+1)
+                self._tweak('REARWING', 'RWSetting', delta=+1)
 
         elif any(t.lower() in track_lower for t in self.track_database['high_speed_flow']):
             self.log("Diagnostic Piste : Profil fluide à très haute force G latérale. Compromis aéro nécessaire.")
             if "spa" in track_lower:
-                self.sm.modify_parameter('FRONTLEFT', 'SpringSetting', delta=+1)
-                self.sm.modify_parameter('FRONTRIGHT', 'SpringSetting', delta=+1)
-                self.sm.modify_parameter('REARWING', 'RWSetting', delta=-1)
+                self._tweak('FRONTLEFT', 'SpringSetting', delta=+1)
+                self._tweak('FRONTRIGHT', 'SpringSetting', delta=+1)
+                self._tweak('REARWING', 'RWSetting', delta=-1)
             elif "cota" in track_lower or "americas" in track_lower:
-                self.sm.modify_parameter('SUSPENSION', 'FrontAntiSwaySetting', delta=+1)
-                self.sm.modify_parameter('SUSPENSION', 'RearAntiSwaySetting', delta=-1)
+                self._tweak('SUSPENSION', 'FrontAntiSwaySetting', delta=+1)
+                self._tweak('SUSPENSION', 'RearAntiSwaySetting', delta=-1)
             elif "paul ricard" in track_lower:
-                self.sm.modify_parameter('DRIVELINE', 'DiffPreloadSetting', delta=+1)
+                self._tweak('DRIVELINE', 'DiffPreloadSetting', delta=+1)
             elif "silverstone" in track_lower or "lusail" in track_lower:
-                self.sm.modify_parameter('REARLEFT', 'RideHeightSetting', delta=+1)
-                self.sm.modify_parameter('REARRIGHT', 'RideHeightSetting', delta=+1)
-                self.sm.modify_parameter('FRONTLEFT', 'CamberSetting', delta=-1)
-                self.sm.modify_parameter('FRONTRIGHT', 'CamberSetting', delta=-1)
+                self._tweak('REARLEFT', 'RideHeightSetting', delta=+1)
+                self._tweak('REARRIGHT', 'RideHeightSetting', delta=+1)
+                self._tweak('FRONTLEFT', 'CamberSetting', delta=-1)
+                self._tweak('FRONTRIGHT', 'CamberSetting', delta=-1)
 
     def _analyze_thermodynamics(self, df):
         """
@@ -1102,11 +1167,11 @@ class RaceEngineerLogic:
             if max_water > 108.0:
                 self.log(f"🚨 DANGER MOTEUR : Surchauffe de l'eau détectée ({max_water:.1f}°C). Le moteur perd de la puissance.")
                 self.log("Action : Ouverture de 2 crans du radiateur d'eau. Tu perdras un peu de VMax, mais tu sauveras le moteur.")
-                self.sm.modify_parameter('BODYAERO', 'WaterRadiatorSetting', delta=+2, limit_max=5)
+                self._tweak('BODYAERO', 'WaterRadiatorSetting', delta=+2, limit_max=5)
             elif max_water < 85.0:
                 self.log(f"Diagnostic : Refroidissement moteur excessif ({max_water:.1f}°C max).")
                 self.log("Action : Fermeture du radiateur d'eau pour réduire la traînée aéro (Drag) et gagner en VMax.")
-                self.sm.modify_parameter('BODYAERO', 'WaterRadiatorSetting', delta=-1, limit_min=1)
+                self._tweak('BODYAERO', 'WaterRadiatorSetting', delta=-1, limit_min=1)
 
         # 2. Analyse du Refroidissement des Freins (Brake Ducts)
         if 'BrakeTempFL' in df.columns and 'BrakeTempFR' in df.columns:
@@ -1121,17 +1186,17 @@ class RaceEngineerLogic:
             if max_brake_front > hot_threshold:
                 self.log(f"🚨 DANGER FREINS : Disques avant en surchauffe ({max_brake_front:.0f}°C). Risque de 'Brake Fade' (pédale molle).")
                 self.log("Action : Ouverture des écopes de freins avant (Front Brake Ducts).")
-                self.sm.modify_parameter('FRONTLEFT', 'BrakeDuctSetting', delta=+1, limit_max=6)
-                self.sm.modify_parameter('FRONTRIGHT', 'BrakeDuctSetting', delta=+1, limit_max=6)
+                self._tweak('FRONTLEFT', 'BrakeDuctSetting', delta=+1, limit_max=6)
+                self._tweak('FRONTRIGHT', 'BrakeDuctSetting', delta=+1, limit_max=6)
                 self.log("Action secondaire : Augmentation de l'épaisseur des disques avant (Brake Disc) pour absorber plus de chaleur.")
-                self.sm.modify_parameter('FRONTLEFT', 'BrakeDiscSetting', delta=+1)
-                self.sm.modify_parameter('FRONTRIGHT', 'BrakeDiscSetting', delta=+1)
+                self._tweak('FRONTLEFT', 'BrakeDiscSetting', delta=+1)
+                self._tweak('FRONTRIGHT', 'BrakeDiscSetting', delta=+1)
                 
             elif min_brake_front > 0 and max_brake_front < cold_threshold:
                 self.log(f"Diagnostic : Freins avant trop froids ({max_brake_front:.0f}°C max). Manque de mordant initial.")
                 self.log("Action : Fermeture des écopes de freins et/ou réduction de l'épaisseur des disques pour gagner du poids.")
-                self.sm.modify_parameter('FRONTLEFT', 'BrakeDuctSetting', delta=-1, limit_min=1)
-                self.sm.modify_parameter('FRONTRIGHT', 'BrakeDuctSetting', delta=-1, limit_min=1)
+                self._tweak('FRONTLEFT', 'BrakeDuctSetting', delta=-1, limit_min=1)
+                self._tweak('FRONTRIGHT', 'BrakeDuctSetting', delta=-1, limit_min=1)
 
 
     def _analyze_endurance_brakes(self, df, race_duration_minutes):
@@ -1178,7 +1243,7 @@ class RaceEngineerLogic:
                     self.log("Diagnostic Aéro : Le nez de la voiture s'écrase totalement à très haute vitesse sous l'effet de l'appui.")
                     self.log("Action : Augmentation de la rigidité du 3ème ressort avant (Front Third Spring) ou diminution du Rake pour gagner en VMax.")
                     # Modif de setup (si supporté par la voiture, ex Hypercar/LMP2)
-                    self.sm.modify_parameter('FRONTTHIRD', 'SpringSetting', delta=+1)
+                    self._tweak('FRONTTHIRD', 'SpringSetting', delta=+1)
                     
     def _analyze_driver_torque(self, df):
         """

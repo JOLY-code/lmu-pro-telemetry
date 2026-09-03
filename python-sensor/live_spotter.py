@@ -20,6 +20,16 @@ class LiveSpotterEngine(threading.Thread):
         self.last_penalties = 0
         self.rain_warned = False
         
+        # --- CERVEAU STRATÉGIQUE ---
+        self.strategy_announced = False
+        self.comm_db = {}
+        comm_path = os.path.join(".", "community_reference.json")
+        if os.path.exists(comm_path):
+            try:
+                with open(comm_path, "r", encoding="utf-8") as f:
+                    self.comm_db = json.load(f)
+            except: pass
+
         self.last_lap_distance = 0.0
         self.laps_completed = 0
         self.fuel_at_lap_start = -1.0
@@ -39,6 +49,7 @@ class LiveSpotterEngine(threading.Thread):
                 continue
                 
             # 1. CORE TRACKING
+            self._announce_pre_race_strategy(data)
             self._track_lap_progress(data)
             self._analyze_flags(data)
             self._analyze_pit_entry(data)
@@ -178,6 +189,71 @@ class LiveSpotterEngine(threading.Thread):
             if cars_alongside >= 2:
                 self.audio.say("Three wide! Three wide! Hold your line!", "three_wide", cooldown=10)
 
+    def _announce_pre_race_strategy(self, data):
+        if getattr(self, 'strategy_announced', False): return
+        
+        track = data.get('TrackName', '')
+        my_class = data.get('MyClass', '')
+        if not track or not my_class or track == 'Unknown Track': return
+        
+        phase = data.get('SessionPhase', 0)
+        # Phase 0 = Dans le Garage, Phase 4 = Sur la grille de départ
+        if phase > 4: return 
+        
+        race_mins = 20 # Durée par défaut
+        try:
+            # L'IA interroge silencieusement notre propre serveur pour connaître la durée de la course !
+            res = requests.get("http://127.0.0.1:8000/api/schedule", timeout=2).json()
+            if res.get('status') == 'success':
+                events = res['data'].get('nextUp', []) + res['data'].get('upcoming', [])
+                for ev in events:
+                    t_clean = ''.join(e for e in track.lower() if e.isalnum())
+                    e_clean = ''.join(e for e in ev['track'].lower() if e.isalnum())
+                    if t_clean in e_clean or e_clean in t_clean:
+                        match = re.search(r'\d+', ev['length'])
+                        if match: 
+                            race_mins = int(match.group())
+                            break
+        except: pass
+        
+        expected_laps = 0
+        c_class = "LMGT3" if "GT3" in my_class else "HYPERCAR" if "HYPER" in my_class else "LMGTE" if "GTE" in my_class else "LMP2WEC" if "P2" in my_class else ""
+        
+        # Lecture du JSON pour connaître le nombre de tours E-sport
+        if hasattr(self, 'comm_db') and self.comm_db and c_class in self.comm_db:
+            cat_data = self.comm_db[c_class]
+            t_key = next((k for k in cat_data.keys() if track.lower().replace(" ","") in k.lower().replace(" ","")), None)
+            if t_key and "fuel_stints" in cat_data[t_key]:
+                exact_key = f"{race_mins}_min"
+                expected_laps = cat_data[t_key]["fuel_stints"].get(exact_key, 0)
+        
+        if expected_laps == 0:
+            expected_laps = int((race_mins * 60) / 115) 
+            
+        capacity = data.get('FuelCapacity', 100.0)
+        
+        # Consommations moyennes théoriques (en Litres)
+        fpl = 3.5
+        if "HYPER" in my_class: fpl = 2.5
+        elif "GTE" in my_class: fpl = 4.0
+        elif "P2" in my_class: fpl = 3.8
+        elif "P3" in my_class: fpl = 3.0
+        
+        # +1.5 tours de marge de sécurité
+        total_fuel_needed = (expected_laps + 1.5) * fpl
+        
+        if total_fuel_needed <= capacity:
+            msg = f"Engineer connected. We are preparing for a {race_mins} minutes race. Expecting {expected_laps} laps. No pit stop required. Put {int(total_fuel_needed)} liters of fuel in the car."
+        else:
+            laps_per_stint = int(capacity / fpl)
+            pit_lap = laps_per_stint - 1
+            laps_left_after_pit = expected_laps - pit_lap
+            fuel_to_add = (laps_left_after_pit + 1.5) * fpl
+            msg = f"Engineer connected. {race_mins} minutes race. We need to pit. Start with a full tank. Plan to pit on lap {pit_lap}, and add {int(fuel_to_add)} liters."
+            
+        self.audio.say(msg, "strategy_brief", cooldown=99999)
+        self.strategy_announced = True
+
     # =========================================================================
     # 2. CAR HEALTH & WEATHER
     # =========================================================================
@@ -266,7 +342,7 @@ class LiveSpotterEngine(threading.Thread):
 
     def _analyze_tires_and_brakes(self, data):
         speed = data.get('Speed', 0)
-        if speed < 60: return 
+        if speed < 60: return
 
         b_fl = data.get('BrakeTempFL', 300)
         b_fr = data.get('BrakeTempFR', 300)
@@ -275,6 +351,7 @@ class LiveSpotterEngine(threading.Thread):
         p_rl = data.get('TirePressRL', 180)
         p_rr = data.get('TirePressRR', 180)
         t_fl = data.get('TireTempFL', 80) 
+        w_fl = data.get('TireWearFL', 0)
 
         if self.laps_completed <= 1 and t_fl < 65:
             self.audio.say("Tires are cold. Brake early and avoid kerbs.", "tires_cold", cooldown=180)
@@ -296,6 +373,11 @@ class LiveSpotterEngine(threading.Thread):
             self.audio.say("Tire pressures are critically low. We are losing mechanical grip.", "press_low", cooldown=600)
         elif p_fl > 195:
             self.audio.say("Tire pressures are too high. The tire is ballooning, be careful on traction.", "press_high", cooldown=600)
+
+        if w_fl > 30.0:
+            self.audio.say("Front left tire wear is critical. You are losing rubber fast.", "tire_wear_critical", cooldown=600)
+        elif w_fl > 15.0:
+            self.audio.say("Tire degradation is increasing. Move brake bias rearwards to protect the front.", "tire_wear_warn", cooldown=1800)
 
     def _analyze_chassis(self, data):
         rh_fl = data.get('RideHeightFL', 0.050)

@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  LayoutDashboard, LineChart, Wrench, Trophy, UserCircle, HelpCircle, 
-  CloudRain, Thermometer, MapPin, CarFront, CalendarDays, FileText, 
-  BarChart2, Compass, Timer, Activity
+  LayoutDashboard, LineChart, Wrench, CalendarDays, FileText, 
+  BarChart2, Compass, Timer, Activity, Menu, ChevronLeft, Scale
 } from 'lucide-react';
 
 // --- IMPORTS DES VUES SÉPARÉES ---
@@ -12,6 +11,7 @@ import SetupView from './views/SetupView';
 import SessionsHistoryView from './views/SessionsHistoryView';
 import AnalyticsView from './views/AnalyticsView';
 import SessionDetailView from './views/SessionDetailView';
+import BoPView from './views/BoPView';
 import { 
   DataView, 
   DrivingView, 
@@ -22,9 +22,11 @@ import {
 } from './views/TelemetryViews';
 
 export default function App() {
-  const [activeMenu, setActiveMenu] = useState('Sessions');
+  // L'application démarre maintenant sur le Dashboard
+  const [activeMenu, setActiveMenu] = useState('Dashboard');
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [subView, setSubView] = useState<'overview' | 'driving' | 'pitwall' | 'setup' | 'timing' | 'data'>('overview');
-  const [selectedHistorySession, setSelectedHistorySession] = useState<any | null>(null); // NOUVEAU
+  const [selectedHistorySession, setSelectedHistorySession] = useState<any | null>(null); 
   
   // =========================================================================
   // 1. ÉTATS DE POST-ANALYSE (DuckDB / REST API)
@@ -32,7 +34,7 @@ export default function App() {
   const [historicalData, setHistoricalData] = useState<any[]>([]);
   const [aiSetup, setAiSetup] = useState<any>(null);
   const [aiReport, setAiReport] = useState<string[]>([]);
-  const [sessionInfo, setSessionInfo] = useState<any>(null); // NOUVEAU: Stockage du contexte
+  const [sessionInfo, setSessionInfo] = useState<any>(null); 
   
   // Tableau des tours (On garde un tour vide par défaut pour la structure)
   const [lapsData, setLapsData] = useState<any[]>([
@@ -49,14 +51,12 @@ export default function App() {
   useEffect(() => {
     const fetchTelemetry = async () => {
       try {
-        // 1. On récupère d'abord les infos du circuit et de la voiture
         const sessRes = await fetch('http://127.0.0.1:8000/api/sessions/latest');
         const sessData = await sessRes.json();
         if (sessData.status === 'success') {
           setSessionInfo(sessData.session);
         }
 
-        // 2. On récupère le diagnostic et le nouveau Setup
         const response = await fetch('http://127.0.0.1:8000/api/diagnostic');
         const data = await response.json();
         
@@ -88,9 +88,6 @@ export default function App() {
 
     ws.onmessage = (event) => {
       const now = performance.now();
-      // THROTTLING CHIRURGICAL : 
-      // On met à jour l'interface seulement toutes les 50ms (~20 Hz)
-      // L'API Python tourne toujours à 60Hz en arrière-plan sans surcharger le front-end.
       if (now - lastWsTime.current > 50) {
         try {
           const parsedData = JSON.parse(event.data);
@@ -103,113 +100,72 @@ export default function App() {
     };
 
     ws.onclose = () => console.log("Lien Télémétrique (WebSocket) coupé.");
-
-    // Cleanup : on ferme proprement le flux si le composant est détruit
     return () => ws.close();
   }, []);
 
-  // Menu latéral
-  // Menu latéral
+  // Menu latéral allégé (Suppression de Leaderboards, Team, Support)
   const menuItems = [
     { name: 'Dashboard', icon: <LayoutDashboard size={20} /> },
     { name: 'Schedule', icon: <CalendarDays size={20} /> },
     { name: 'Analytics', icon: <BarChart2 size={20} /> }, 
-    { name: 'Sessions', icon: <FileText size={20} /> }, // NOUVEAU : Historique XML
-    { name: 'Telemetry', icon: <LineChart size={20} /> }, // RENOMMÉ : L'ancienne vue complexe
+    { name: 'Sessions', icon: <FileText size={20} /> },
+    { name: 'Telemetry', icon: <LineChart size={20} /> },
     { name: 'Setups', icon: <Wrench size={20} /> },
-    { name: 'Leaderboards', icon: <Trophy size={20} /> },
-    { name: 'Team', icon: <UserCircle size={20} /> },
-    { name: 'Support', icon: <HelpCircle size={20} /> },
+    { name: 'BoP Limits', icon: <Scale size={20} /> }, 
   ];
 
   return (
     <div className="flex h-screen w-full bg-[#181924] overflow-hidden font-sans text-white">
       
-      {/* 1. SIDEBAR PRINCIPALE (INTACTE) */}
-      <div className="w-64 bg-[#212332] flex flex-col border-r border-gray-800">
-        <div className="p-6 flex items-center gap-3 border-b border-gray-800">
-          <div className="w-8 h-8 bg-[#3a86ff] rounded-md flex items-center justify-center font-bold text-white shadow-lg shadow-blue-500/30">
-            LMU
+      {/* 1. SIDEBAR PRINCIPALE (RÉTRACTABLE) */}
+      <div className={`${isSidebarCollapsed ? 'w-20' : 'w-64'} bg-[#212332] flex flex-col border-r border-gray-800 transition-all duration-300 z-50 shrink-0`}>
+        <div className="p-6 flex items-center justify-between border-b border-gray-800 h-20">
+          <div className={`flex items-center gap-3 ${isSidebarCollapsed ? 'hidden' : 'flex'}`}>
+            <div className="w-8 h-8 bg-[#3a86ff] rounded-md flex items-center justify-center font-bold text-white shadow-lg shadow-blue-500/30 shrink-0">
+              LMU
+            </div>
+            <span className="font-bold text-lg tracking-wide whitespace-nowrap">ENGINEER</span>
           </div>
-          <span className="font-bold text-lg tracking-wide">PRO ENGINEER</span>
+          <button onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)} className="text-gray-400 hover:text-white p-1 rounded-md bg-[#181924] border border-gray-700 mx-auto transition-colors">
+            {isSidebarCollapsed ? <Menu size={18} /> : <ChevronLeft size={18} />}
+          </button>
         </div>
 
-        <nav className="flex-1 py-4">
+        <nav className="flex-1 py-4 overflow-y-auto scrollbar-hide">
           {menuItems.map((item) => (
             <button
               key={item.name}
               onClick={() => {
                 setActiveMenu(item.name);
-                if (item.name !== 'Sessions') setSelectedHistorySession(null); // Réinitialise la vue
+                if (item.name !== 'Sessions') setSelectedHistorySession(null);
               }}
-              className={`w-full flex items-center gap-4 px-6 py-4 transition-all duration-200 ... `}
+              className={`w-full flex items-center px-6 py-4 transition-all duration-200 hover:bg-[#181924] ${activeMenu === item.name ? 'border-r-4 border-[#3a86ff] bg-[#181924]' : ''} ${isSidebarCollapsed ? 'justify-center px-0' : 'gap-4'}`}
+              title={isSidebarCollapsed ? item.name : ''}
             >
-              <span className={activeMenu === item.name ? 'text-[#3a86ff]' : ''}>
+              <span className={activeMenu === item.name ? 'text-[#3a86ff]' : 'text-gray-400'}>
                 {item.icon}
               </span>
-              <span className="text-sm tracking-wider">{item.name.toUpperCase()}</span>
+              {!isSidebarCollapsed && <span className={`text-sm tracking-wider ${activeMenu === item.name ? 'font-bold text-white' : 'text-gray-400'}`}>{item.name.toUpperCase()}</span>}
             </button>
           ))}
         </nav>
 
-        <div className="p-4 border-t border-gray-800 flex items-center gap-3 bg-[#1c1e2b]">
-          <div className="w-10 h-10 bg-[#3a86ff]/20 text-[#3a86ff] rounded-full flex items-center justify-center font-bold">
+        <div className={`p-4 border-t border-gray-800 flex items-center bg-[#1c1e2b] transition-all ${isSidebarCollapsed ? 'justify-center' : 'gap-3'}`}>
+          <div className="w-10 h-10 bg-[#3a86ff]/20 text-[#3a86ff] rounded-full flex items-center justify-center font-bold shrink-0">
             MJ
           </div>
-          <div className="flex flex-col text-left">
-            <span className="text-sm font-bold">Mathéo Joly</span>
-            <span className="text-xs text-[#3a86ff] font-bold">PRO-AM DRIVER</span>
-          </div>
+          {!isSidebarCollapsed && (
+            <div className="flex flex-col text-left overflow-hidden">
+              <span className="text-sm font-bold truncate">Mathéo Joly</span>
+              <span className="text-[10px] text-[#3a86ff] font-bold tracking-widest truncate">PRO-AM DRIVER</span>
+            </div>
+          )}
         </div>
       </div>
 
-      {/* 2. ZONE PRINCIPALE */}
+      {/* 2. ZONE PRINCIPALE (Top Bar Supprimée) */}
       <div className="flex-1 flex flex-col h-full overflow-hidden">
         
-        {/* HEADER TOP BAR (Statuts Météo et Live Data) */}
-        <div className="h-16 bg-[#181924] border-b border-gray-800 px-6 flex items-center justify-between text-xs font-semibold text-[#a0a3b5]">
-          <div className="flex items-center gap-3">
-            
-            <div className="bg-[#1e3b2e] text-[#2a9d5c] px-3 py-1.5 rounded font-black tracking-widest flex items-center gap-2">
-              <span className="italic">LM</span> P
-            </div>
-            
-            {/* Injection dynamique du Circuit et de la Météo (DuckDB ou Live) */}
-            <div className="bg-[#1c1e2b] px-4 py-2 rounded-md flex items-center gap-4 border border-gray-800/50">
-              <span className="text-white font-bold tracking-wide flex items-center gap-2">
-                <MapPin size={14} className="text-[#3a86ff]"/> 
-                {sessionInfo ? sessionInfo.TrackName : 'AWAITING TRACK DATA'}
-              </span>
-              <span className="flex items-center gap-1 text-[#3a86ff]">
-                <CloudRain size={14} /> 
-                {liveData?.RainIntensity !== undefined 
-                  ? (liveData.RainIntensity * 100).toFixed(0) 
-                  : (sessionInfo ? (sessionInfo.RainPathLevel * 100).toFixed(0) : '--')}%
-              </span>
-              <span className="flex items-center gap-1 text-[#e76f51]">
-                <Thermometer size={14} /> 
-                {liveData?.TrackTemp !== undefined 
-                  ? liveData.TrackTemp.toFixed(1) 
-                  : (sessionInfo ? sessionInfo.TrackTemp.toFixed(1) : '--')}°C
-              </span>
-            </div>
-            
-            {/* Injection dynamique de la Voiture */}
-            <div className="bg-[#1c1e2b] px-4 py-2 rounded-md flex items-center gap-2 border border-gray-800/50">
-              <CarFront size={14} className="text-[#e9c46a]"/>
-              <span className="text-white font-bold tracking-wider">
-                {sessionInfo ? `${sessionInfo.VehicleName} (${sessionInfo.VehicleClass})` : 'AWAITING CAR DATA'}
-              </span>
-            </div>
-          </div>
-          
-          {/* Signal visuel de connexion au Live */}
-          <div className="bg-[#1c1e2b] px-4 py-2 rounded-md flex items-center gap-2 border border-gray-800/50">
-            <div className={`w-2 h-2 rounded-full ${liveData ? 'bg-[#2a9d5c] shadow-[0_0_8px_#2a9d5c] animate-pulse' : 'bg-[#e76f51]'}`}></div>
-            <span className="text-white font-mono ml-2">{liveData ? 'LIVE TELEMETRY ACTIVE' : 'OFFLINE'}</span>
-          </div>
-        </div>
-
         {/* ROUTING DES VUES (Injection des props) */}
         <div className="flex-1 flex overflow-hidden">
           
@@ -264,6 +220,8 @@ export default function App() {
 
             ) : activeMenu === 'Setups' ? (
               <SetupView currentSetup={aiSetup} aiReport={aiReport} sessionInfo={sessionInfo} />
+            ) : activeMenu === 'BoP Limits' ? (
+              <BoPView />  
             ) : (
               <div className="flex-1 bg-[#212332] rounded-xl border border-gray-800 flex items-center justify-center text-[#a0a3b5] font-bold">
                 Module {activeMenu} is under construction...

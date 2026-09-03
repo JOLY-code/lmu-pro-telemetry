@@ -5,6 +5,7 @@ import glob
 import hashlib
 import datetime
 import traceback
+import json
 
 class XMLHistoryParser:
     """Module Data Engineer dédié EXCLUSIVEMENT à l'historique XML."""
@@ -473,10 +474,108 @@ class XMLHistoryParser:
                 except:
                     return "--:--.---"
 
-            # 1. RÉCUPÉRATION DU "ALIEN PACE" : Le meilleur tour absolu de la catégorie dans la session !
-            alien_lap_df = con.execute("SELECT MIN(BestLapTime) as AlienPace FROM session_drivers WHERE CarClass = ? AND FileID = ? AND BestLapTime > 0", [player_class, info['FileID']]).df()
-            alien_pace_val = alien_lap_df['AlienPace'].iloc[0] if not alien_lap_df.empty else 0.0
-            alien_pace = float(alien_pace_val) if pd.notna(alien_pace_val) else 0.0
+            # 1. RÉCUPÉRATION DU "ALIEN PACE" (Via le JSON Ohne Speed)     
+            alien_sec = 0.0
+            alien_str = "--:--.---"
+            
+            session_track = str(sess['TrackVenue']).strip()
+            # NOUVEAU : On récupère le CarType pur (ex: "Ferrari 499P") pour matcher le JSON !
+            session_car_type = str(info['CarType']).strip() if 'CarType' in info and pd.notna(info['CarType']) else ""
+            session_category = str(info['Category']).strip() if 'Category' in info and pd.notna(info['Category']) else ""
+            session_veh_name = str(info['VehName']).strip()
+            
+            # Chaîne de recherche globale (Combine la livrée, la catégorie et le châssis)
+            car_search_str = f"{session_car_type} {session_category} {session_veh_name}".lower()
+            
+            # --- CORRECTION MAJEURE : TRADUCTION DE LA CATÉGORIE XML -> JSON ---
+            raw_class = str(player_class).upper().replace(" CAR", "").strip()
+            if "HYPER" in raw_class: clean_class = "HYPERCAR"
+            elif "GT3" in raw_class: clean_class = "LMGT3"
+            elif "GTE" in raw_class: clean_class = "LMGTE"
+            else: clean_class = raw_class
+            
+            comm_path = os.path.join(".", "community_reference.json")
+            if os.path.exists(comm_path):
+                try:
+                    with open(comm_path, "r", encoding="utf-8") as f:
+                        db = json.load(f)
+                    
+                    cat_data = db.get(clean_class, {})
+                    if not cat_data and "LMP2" in clean_class:
+                        cat_data = db.get("LMP2WEC", {}) # Fallback sécurité LMP2
+                    
+                    # A. DICTIONNAIRE DE TRADUCTION STRICT (LMU -> JSON)
+                    track_map = {
+                        "Bahrain International": "Bahrain (wec)",
+                        "Bahrain Endurance": "Bahrain (endurance)",
+                        "Bahrain Outer": "Bahrain (outer)",
+                        "Bahrain Paddock": "Bahrain (paddock)",
+                        "Barcelona": "Barcelona",
+                        "Mulsanne": "Circuit de la Sarthe (straight)",
+                        "Sarthe": "Circuit de la Sarthe",
+                        "COTA": "COTA",
+                        "Americas": "COTA",
+                        "Daytona": "Daytona",
+                        "Fuji": "Fuji (chicane)", # Par défaut, Fuji dans LMU = Chicane WEC
+                        "Imola": "Imola",
+                        "Jose Carlos Pace": "Interlagos",
+                        "Interlagos": "Interlagos",
+                        "Laguna Seca": "Laguna Seca",
+                        "Curva Grande": "Monza (curvagrande)",
+                        "Monza": "Monza",
+                        "Paul Ricard": "Paul Ricard",
+                        "Algarve": "Portimao",
+                        "Portimao": "Portimao",
+                        "Qatar": "Qatar",
+                        "Sebring International": "Sebring",
+                        "Sebring School": "Sebring (school)",
+                        "Silverstone Grand Prix": "Silverstone (GP)",
+                        "Silverstone National": "Silverstone (National)",
+                        "Silverstone International": "Silverstone (International)",
+                        "Spa": "Spa"
+                    }
+                    
+                    target_track_key = None
+                    for lmu_keyword, json_key in track_map.items():
+                        if lmu_keyword.lower() in session_track.lower():
+                            target_track_key = json_key
+                            break
+                            
+                    track_data = cat_data.get(target_track_key, {}) if target_track_key else {}
+                    
+                    # B. Trouver le temps E-sport EXACT de ta voiture
+                    car_ref_time = None
+                    if "specific_cars" in track_data:
+                        for db_car, db_time in track_data["specific_cars"].items():
+                            db_c = db_car.lower().replace(" evo", "").replace(" ii", "")
+                            # On regarde si la voiture du JSON (ex: "ferrari 499p") est dans notre chaîne de recherche
+                            if db_c in car_search_str or db_car.lower() in car_search_str:
+                                car_ref_time = db_time
+                                break
+                    
+                    def to_sec(t_str):
+                        if not t_str or ":" not in str(t_str): return 0.0
+                        m, s = str(t_str).split(':')
+                        return int(m) * 60 + float(s)
+
+                    # C. Application du chrono !
+                    if car_ref_time and car_ref_time != "N/A" and "%" not in car_ref_time:
+                        alien_sec = to_sec(car_ref_time)
+                        alien_str = car_ref_time
+                    elif track_data.get("alien_time_sec"):
+                        alien_sec = track_data["alien_time_sec"]
+                        alien_str = track_data.get("laptime_str", "--:--.---")
+                except Exception as e:
+                    print(f"[PACE] Erreur lecture JSON: {e}")
+            
+            # Fallback Sécurité : S'il n'y a pas de JSON, pas de correspondance de circuit, ou une valeur N/A
+            if alien_sec == 0.0:
+                alien_lap_df = con.execute("SELECT MIN(BestLapTime) as AlienPace FROM session_drivers WHERE CarClass = ? AND FileID = ? AND BestLapTime > 0", [player_class, info['FileID']]).df()
+                alien_pace_val = alien_lap_df['AlienPace'].iloc[0] if not alien_lap_df.empty else 0.0
+                alien_sec = float(alien_pace_val) if pd.notna(alien_pace_val) else 0.0
+                alien_str = format_time(alien_sec)
+                
+            alien_pace = alien_sec # Variable conservée pour ne pas casser le code suivant
 
             # 2. RÉCUPÉRATION DE TOUS TES TOURS
             laps_df = con.execute("SELECT * FROM laps WHERE DriverName = ? AND UPPER(SessionType) = UPPER(?) AND LapTime > 0", [player_name, session_type]).df()
@@ -563,7 +662,7 @@ class XMLHistoryParser:
                 "topSpeed": f"{top_speed:.1f} km/h",
                 "avgVirtualEnergy": f"{avg_ve:.2f}%" if avg_ve > 0 else "N/A",
                 "mostWornTyre": most_worn_name,
-                "alienPace": format_time(alien_pace),
+                "alienPace": alien_str,
                 "paceData": pace_data, # <--- ON ENVOIE LES 4 BOUTONS ICI
                 "validLapsCount": len(race_pace_laps)
             }

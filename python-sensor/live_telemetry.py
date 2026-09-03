@@ -357,6 +357,12 @@ class LiveTelemetryThread(threading.Thread):
                     wheels_detached = int(my_phys.mDetached) + sum([w.mDetached for w in my_phys.mWheel])
 
                     live_data = {
+                        
+                        # --- INFOS SESSION ---
+                        'SessionPhase': scoring_data.mGamePhase,
+                        'TrackName': scoring_data.mTrackName.decode('utf-8', errors='ignore').split('-')[0].strip(),
+                        'FuelCapacity': my_phys.mFuelCapacity,
+
                         # --- ENVIRONNEMENT ---
                         'Time': scoring_data.mCurrentET, 
                         'TrackTemp': scoring_data.mTrackTemp,

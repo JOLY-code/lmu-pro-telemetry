@@ -14,7 +14,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import File, UploadFile, HTTPException
+from fastapi import File, UploadFile, HTTPException, Query
 from pydantic import BaseModel
 
 # Import des scripts Python purs
@@ -24,7 +24,9 @@ from setup_manager import LMU_SetupManager
 from RaceEngineerLogic import RaceEngineerLogic
 from audio_spotter import AudioSpotter
 from live_spotter import LiveSpotterEngine
-from xml_parser import XMLHistoryParser # <--- LE NOUVEAU PARSEUR
+from xml_parser import XMLHistoryParser 
+from bop_manager import BoPManager
+from community_reference_manager import CommunityReferenceManager
 
 # ==========================================================
 # ISOLATION MATÉRIELLE
@@ -59,6 +61,19 @@ def startup_event():
     audio_engine.start()
     spotter_engine.start()
 
+    def update_external_data():
+        # Mise à jour BoP (Le manager lit le titre de l'article en ligne avant de télécharger)
+        bop = BoPManager()
+        if bop.fetch_latest_bop_pdf():
+            bop.parse_bop_pdf()
+        
+        # Mise à jour Laptimes (Le manager lit le "Last updated: [...] CEST" avant de télécharger)
+        from community_reference_manager import CommunityReferenceManager
+        comm = CommunityReferenceManager()
+        comm.fetch_and_parse()
+
+    threading.Thread(target=update_external_data, daemon=True).start()
+
 @app.on_event("shutdown")
 def shutdown_event():
     print("[API] Arrêt des processus sécurisés...")
@@ -80,6 +95,29 @@ async def websocket_telemetry(websocket: WebSocket):
             await asyncio.sleep(1/60.0)
     except WebSocketDisconnect:
         print("[WS] Interface React déconnectée.")
+
+@app.get("/api/community-reference")
+def get_community_reference():
+    """Renvoie les données d'Ohne Speed (Temps Alien, Barèmes de Pace, Fuel)."""
+    comm_path = os.path.join(".", "community_reference.json")
+    if os.path.exists(comm_path):
+        with open(comm_path, "r", encoding="utf-8") as f:
+            return {"status": "success", "data": json.load(f)}
+    return {"status": "error", "message": "Aucune donnée de référence locale."}
+
+@app.get("/api/test-audio")
+def test_audio():
+    audio_engine.say("Box, box. Radio check, loud and clear.", "test", cooldown=0)
+    return {"status": "success"}
+
+@app.get("/api/bop")
+def get_bop_data():
+    """Renvoie la base de données BoP complète."""
+    bop_path = os.path.join(".", "bop_database.json")
+    if os.path.exists(bop_path):
+        with open(bop_path, "r", encoding="utf-8") as f:
+            return {"status": "success", "data": json.load(f)}
+    return {"status": "error", "message": "Aucune donnée BoP locale trouvée."}
 
 @app.get("/api/sessions/latest")
 def get_latest_session_info():
@@ -134,13 +172,17 @@ def get_sessions_history():
         return {"status": "error", "message": str(e)}
 
 @app.get("/api/sessions/details")
-def get_session_details(file: str, type: str):
-    parser = XMLHistoryParser(log_directory=".")
+def get_session_details(file: str = Query(...), type: str = Query(...)):
     try:
+        # CORRECTION ICI : On remet le "." classique au lieu du LMU_LOG_DIR qui faisait crasher
+        parser = XMLHistoryParser(log_directory=".") 
         details = parser.get_session_details(file, type)
-        if details: return {"status": "success", "data": details}
-        return {"status": "error", "message": "Aucune donnée détaillée trouvée."}
+        if details:
+            return {"status": "success", "data": details}
+        return {"status": "error", "message": "Détails introuvables."}
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return {"status": "error", "message": str(e)}
 
 @app.get("/api/sessions/standings")

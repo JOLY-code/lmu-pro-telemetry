@@ -200,7 +200,7 @@ const AnalyticsView = ({ setActiveMenu, setSelectedHistorySession }: any) => {
   
   // Filtres globaux
   const [activeMode, setActiveMode] = useState<'All Modes' | 'Online' | 'Offline'>('Online');
-  const [activeType, setActiveType] = useState<'All Types' | 'Races' | 'Qualifying' | 'Practice'>('Practice');
+  const [activeType, setActiveType] = useState<'All Types' | 'Races' | 'Qualifying' | 'Practice'>('Races');
   const [category, setCategory] = useState('All Categories');
   const [trackNationFilter, setTrackNationFilter] = useState('All Nations');
   const [isTrackDropdownOpen, setIsTrackDropdownOpen] = useState(false);
@@ -238,6 +238,7 @@ const AnalyticsView = ({ setActiveMenu, setSelectedHistorySession }: any) => {
   // --- ÉTATS DE DONNÉES DYNAMIQUES ---
   const [isLoading, setIsLoading] = useState(false);
   const [calcState, setCalcState] = useState({ timeH: 1, timeM: 0, lapM: 1, lapS: 33, multi: 1, useComm: false });
+  const [commDb, setCommDb] = useState<any>(null);
   
   // L'unique structure globale qui connecte l'UI aux futures données de DuckDB
   const [stats, setStats] = useState({
@@ -274,16 +275,21 @@ const AnalyticsView = ({ setActiveMenu, setSelectedHistorySession }: any) => {
     }
   });
 
-  // --- MOTEUR DE CALCUL DYNAMIQUE (Basé sur l'historique XML existant) ---
+  // --- MOTEUR DE CALCUL DYNAMIQUE (Basé sur l'historique XML + JSON Communauté) ---
   useEffect(() => {
     let isMounted = true;
     setIsLoading(true);
 
-    fetch('http://127.0.0.1:8000/api/sessions/history')
-      .then(res => res.json())
-      .then(json => {
-        if (isMounted && json.status === 'success') {
-          const allSessions = json.data;
+    Promise.all([
+      fetch('http://127.0.0.1:8000/api/sessions/history').then(res => res.json()),
+      fetch('http://127.0.0.1:8000/api/community-reference').then(res => res.json())
+    ]).then(([json, commJson]) => {
+        if (isMounted) {
+          const commData = commJson.status === 'success' ? commJson.data : null;
+          setCommDb(commData);
+          
+          if (json.status === 'success') {
+            const allSessions = json.data;
           
           // 1. Filtrage local
           const filtered = allSessions.filter((s: any) => {
@@ -372,10 +378,33 @@ const AnalyticsView = ({ setActiveMenu, setSelectedHistorySession }: any) => {
             if (sType.includes('PRACTICE')) ltPractice++;
             if (s.mode === 'Multiplayer') ltOnline++; else ltOffline++;
 
-            if (!ltCategoryMap.has(s.class)) ltCategoryMap.set(s.class, { category: s.class, sessions: 0, tracks: new Set() });
+            if (!ltCategoryMap.has(s.class)) ltCategoryMap.set(s.class, { category: s.class, sessions: 0, tracks: new Set(), totalPct: 0, validPctCount: 0 });
             const cMap = ltCategoryMap.get(s.class);
             cMap.sessions++;
             cMap.tracks.add(s.track);
+            
+            // Calcul du % vs Alien Pace
+            if (commData) {
+               let cClass = s.class.toUpperCase().replace(' CAR', '');
+               if (cClass.includes('HYPER')) cClass = 'HYPERCAR';
+               if (cClass.includes('GT3')) cClass = 'LMGT3';
+               if (cClass.includes('GTE')) cClass = 'LMGTE';
+               if (cClass.includes('LMP2')) cClass = 'LMP2WEC';
+               
+               const catData = commData[cClass];
+               if (catData) {
+                  // Matching du circuit
+                  const tKey = Object.keys(catData).find(k => s.track.toLowerCase().replace(/[^a-z]/g, '').includes(k.toLowerCase().replace(/[^a-z]/g, '')) || k.toLowerCase().replace(/[^a-z]/g, '').includes(s.track.toLowerCase().replace(/[^a-z]/g, '')));
+                  if (tKey && catData[tKey].alien_time_sec) {
+                     const refSec = catData[tKey].alien_time_sec;
+                     const sSecs = timeToSecs(s.best);
+                     if (sSecs !== Infinity && refSec > 0) {
+                         cMap.totalPct += (sSecs / refSec) * 100;
+                         cMap.validPctCount++;
+                     }
+                  }
+               }
+            }
 
             if (!ltTrackMap.has(s.track)) {
               ltTrackMap.set(s.track, {
@@ -590,9 +619,14 @@ const AnalyticsView = ({ setActiveMenu, setSelectedHistorySession }: any) => {
               totalTracks: ltTrackMap.size,
               byType: { race: ltRace, qualy: ltQualy, practice: ltPractice },
               byMode: { online: ltOnline, offline: ltOffline },
-              byCategory: Array.from(ltCategoryMap.values()).map((c: any) => ({
-                category: c.category, sessions: c.sessions, tracks: c.tracks.size, avgRef: '102.8%'
-              })),
+              byCategory: Array.from(ltCategoryMap.values()).map((c: any) => {
+                const avg = c.validPctCount > 0 ? (c.totalPct / c.validPctCount) : null;
+                return {
+                  category: c.category, sessions: c.sessions, tracks: c.tracks.size, 
+                  avgRef: avg ? `${avg.toFixed(2)}%` : 'N/A',
+                  colorRef: avg ? (avg <= 101.5 ? '#3a86ff' : avg <= 103.5 ? '#10b981' : avg <= 106 ? '#e9c46a' : '#ef4444') : '#4b5563'
+                };
+              }),
               byTrack: byTrackData,
               allSessions: validLapSessions.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime())
             },
@@ -603,7 +637,7 @@ const AnalyticsView = ({ setActiveMenu, setSelectedHistorySession }: any) => {
             }
           });
         }
-      })
+      }})
       .catch(err => console.error("Erreur Analytics :", err))
       .finally(() => {
         if (isMounted) setIsLoading(false);
@@ -1218,7 +1252,34 @@ const AnalyticsView = ({ setActiveMenu, setSelectedHistorySession }: any) => {
                   // Mathématiques du Calculateur
                   const totalRaceSecs = (calcState.timeH * 3600) + (calcState.timeM * 60);
                   const lapSecs = (calcState.lapM * 60) + calcState.lapS;
-                  const totalLaps = lapSecs > 0 ? Math.ceil(totalRaceSecs / lapSecs) : 0;
+                  let totalLaps = lapSecs > 0 ? Math.ceil(totalRaceSecs / lapSecs) : 0;
+                  
+                  // NOUVEAU : Injection des relais (stints) de la communauté !
+                  let commStintsData = null;
+                  if (commDb && selectedTrack && selectedCarDetails) {
+                     let cClass = selectedCarDetails.category.toUpperCase();
+                     if (cClass.includes('HYPER')) cClass = 'HYPERCAR';
+                     if (cClass.includes('GT3')) cClass = 'LMGT3';
+                     if (cClass.includes('GTE')) cClass = 'LMGTE';
+                     if (cClass.includes('LMP2')) cClass = 'LMP2WEC';
+                     
+                     const catData = commDb[cClass];
+                     if (catData) {
+                        const tKey = Object.keys(catData).find(k => selectedTrack.toLowerCase().replace(/[^a-z]/g, '').includes(k.toLowerCase().replace(/[^a-z]/g, '')) || k.toLowerCase().replace(/[^a-z]/g, '').includes(selectedTrack.toLowerCase().replace(/[^a-z]/g, '')));
+                        if (tKey && catData[tKey].fuel_stints) {
+                           commStintsData = catData[tKey].fuel_stints;
+                        }
+                     }
+                  }
+                  
+                  // Si l'utilisateur clique sur "COMMUNITY", on lit les vrais tours e-sport
+                  if (calcState.useComm && commStintsData) {
+                     const totalMins = Math.round(totalRaceSecs / 60);
+                     const exactKey = `${totalMins}_min`;
+                     if (commStintsData[exactKey]) {
+                         totalLaps = commStintsData[exactKey];
+                     }
+                  }
                   
                   const targetFuelPct = calcState.useComm ? cons.fuelComm : cons.fuelYou;
                   const targetVePct = calcState.useComm ? cons.veComm : cons.veYou;
@@ -1394,7 +1455,7 @@ const AnalyticsView = ({ setActiveMenu, setSelectedHistorySession }: any) => {
                     <div><span className={`px-2 py-0.5 rounded text-[9px] font-black tracking-widest uppercase border ${getClassColor(row.category)}`}>{row.category}</span></div>
                     <div className="text-center text-gray-300">{row.sessions}</div>
                     <div className="text-center text-gray-300">{row.tracks}</div>
-                    <div className="text-right text-[#10b981]">{row.avgRef}</div>
+                    <div className="text-right font-mono font-bold" style={{ color: row.colorRef }}>{row.avgRef}</div>
                   </div>
                 ))}
               </div>
