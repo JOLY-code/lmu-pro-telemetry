@@ -340,11 +340,12 @@ class LiveTelemetryThread(threading.Thread):
                             'pos_z': score_car.mPos.z  
                         })
 
-                for i in range(telemetry_array.mNumVehicles):
-                    phys_car = telemetry_array.mVehicles[i]
-                    if phys_car.mIsPlayer == 1:
-                        my_phys = phys_car
-                        break
+                if my_score:
+                    for i in range(telemetry_array.mNumVehicles):
+                        phys_car = telemetry_array.mVehicles[i]
+                        if phys_car.mID == my_score.mID:
+                            my_phys = phys_car
+                            break
 
                 if my_phys and my_score:
                     # Calcul du vent réel
@@ -418,9 +419,10 @@ class LiveTelemetryThread(threading.Thread):
                         'Rear3rdDeflection': my_phys.mRear3rdDeflection,
                         'SteeringTorque': my_phys.mSteeringShaftTorque,
                         
-                        'GForceLat': my_phys.mGForce[0],
-                        'GForceVert': my_phys.mGForce[1],
-                        'GForceLon': my_phys.mGForce[2],
+                        # --- G-Forces ---
+                        'GForceLat': my_phys.mLocalAccel.x / 9.80665,
+                        'GForceVert': my_phys.mLocalAccel.y / 9.80665,
+                        'GForceLon': -my_phys.mLocalAccel.z / 9.80665,
                         
                         # --- MOTEUR ET ÉNERGIE ---
                         'Gear': my_phys.mGear, 

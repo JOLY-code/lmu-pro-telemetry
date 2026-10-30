@@ -39,6 +39,8 @@ LMU_SETUP_DIR = r"C:\Program Files (x86)\Steam\steamapps\common\Le Mans Ultimate
 
 # 3. Ton coffre-fort personnel (Base de données, BoP, JSONs de la communauté)
 APP_DATA_DIR = r"C:\LMU_TrackEngineer_Data"
+
+setup_manager = LMU_SetupManager(setups_directory=LMU_SETUP_DIR)
 os.makedirs(APP_DATA_DIR, exist_ok=True) # Crée le dossier s'il n'existe pas
 
 # ==========================================================
@@ -76,13 +78,13 @@ def startup_event():
 
     def update_external_data():
         # Mise à jour BoP
-        bop = BoPManager(data_dir=APP_DATA_DIR)
+        bop = BoPManager(storage_dir=APP_DATA_DIR)
         if bop.fetch_latest_bop_pdf():
             bop.parse_bop_pdf()
         
         # Mise à jour Laptimes
         from community_reference_manager import CommunityReferenceManager
-        comm = CommunityReferenceManager(data_dir=APP_DATA_DIR)
+        comm = CommunityReferenceManager(storage_dir=APP_DATA_DIR)
         comm.fetch_and_parse()
         
         # --- NOUVEAU : AUTO-SCAN DES XML DE FIN DE COURSE ---
@@ -166,6 +168,7 @@ def run_ai_diagnostic():
     if df_telemetry is None: return {"status": "error", "message": "Aucune donnée"}
 
     df_spatial = pipeline.build_spatial_telemetry(df_telemetry)
+    setup_manager.parse_svm()
     sm = LMU_SetupManager(setups_directory=LMU_SETUP_DIR) # Modifié
     engineer = RaceEngineerLogic(sm)
     success = engineer.analyze_and_optimize(df_telemetry, session_context, df_competitors)
@@ -322,7 +325,7 @@ async def upload_xml_results(file: UploadFile = File(...)):
 def delete_session(file: str):
     import gc
     if ".." in file or "/" in file or "\\" in file: return {"status": "error", "message": "Invalide."}
-    file_path = os.path.join(".", file)
+    file_path = os.path.join(APP_DATA_DIR, file)
     try:
         if os.path.exists(file_path) and file.endswith(".duckdb"):
             gc.collect() 
@@ -513,7 +516,7 @@ def get_online_schedule():
 @app.get("/api/setups/apply")
 def apply_setup(track: str):
     sm = LMU_SetupManager(setups_directory=LMU_SETUP_DIR) # Modifié
-    sm.export_optimized_setup(track_name=track)
+    setup_manager.export_optimized_setup(track_name=track)
     return {"status": "success"}
 
 if __name__ == "__main__":

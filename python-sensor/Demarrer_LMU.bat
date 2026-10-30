@@ -22,8 +22,7 @@ echo [2/2] Lancement de l'Interface React (Frontend)...
 cd ..
 cd lmu-frontend
 
-start "LMU Frontend" cmd /k "npm start"
-:: Si tu as cree ton projet React avec Vite, remplace "npm start" par "npm run dev"
+start "LMU Frontend" cmd /k "npm run dev"
 
 echo.
 echo ===================================================

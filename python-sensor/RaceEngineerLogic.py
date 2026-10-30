@@ -224,7 +224,7 @@ class RaceEngineerLogic:
         self.log(f"🏎️ Véhicule : {self.current_car_model} ({self.current_car_class}) | ABS: {'Oui' if self.has_abs else 'Non'} | Règles: {'SETUP FIXE' if self.is_fixed_setup else 'SETUP OUVERT'}")
 
         # --- INTÉGRATION EXHAUSTIVE DE LA BOP ---
-        bop = BoPManager()
+        bop = BoPManager(storage_dir=r"C:\LMU_TrackEngineer_Data")
         self.bop_limits = bop.get_bop_limits(circuit, self.current_car_class, self.current_car_model)
         
         if self.bop_limits:
@@ -285,9 +285,8 @@ class RaceEngineerLogic:
         self._analyze_gearbox(df_telemetry)
         self._analyze_driver_plateau(df_telemetry, current_position=5, target_position=1)
         self._analyze_hybrid_deployment(df_telemetry)
-        self._analyze_wear_and_damage(df_telemetry)
         self._analyze_electronics(df_telemetry)
-        self._optimize_cold_pressures(df_telemetry, ambient_temp) # <-- On passe la VRAIE température de l'air
+        self._optimize_cold_pressures(df_telemetry, session_context)
         self._analyze_track_specifics(circuit, df_telemetry)
         self._analyze_endurance_brakes(df_telemetry, duree)
         self._analyze_aero_environment(df_telemetry)
@@ -429,9 +428,9 @@ class RaceEngineerLogic:
                 bump_data = df[df[col] < 0][col] # Négatif = Compression
                 rebound_data = df[df[col] > 0][col] # Positif = Détente
                 
-                bump_area = np.trapz(np.abs(bump_data)) if len(bump_data) > 1 else 1.0
-                rebound_area = np.trapz(rebound_data) if len(rebound_data) > 1 else 1.0
-                symmetry_ratio = bump_area / rebound_area if rebound_area > 0 else 1.0
+                bump_sum = np.abs(bump_data).sum() if not bump_data.empty else 1.0
+                rebound_sum = rebound_data.sum() if not rebound_data.empty else 1.0
+                symmetry_ratio = bump_sum / rebound_sum if rebound_sum > 0 else 1.0
                 
                 wheel_prefix = "FRONT" if "F" in col else "REAR"
                 wheel_side = "LEFT" if "L" in col else "RIGHT"
